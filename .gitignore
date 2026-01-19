@@ -14,42 +14,29 @@ node_modules/
 nlp-finetune-ui/node_modules/
 dist/
 .npm/
+.next/
 
-# --- Data & Artifacts (regenerated at runtime) ---
-uploads/
+# --- Vercel ---
+.vercel/
+
+# --- Data & Artifacts ---
+uploads/*
+!uploads/.gitkeep
+backend/uploads/*
+!backend/uploads/.gitkeep
 runs/
 checkpoints/
 exports/
 reports/
 wandb/
+backend/data/hf_cache/
 
 # --- Environment / Secrets ---
 .env
 .env.*
-
-# --- OS / Editor ---
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-
-# --- Logs & Temp ---
 *.log
 *.tmp
-*.cache
-
-# Keep placeholder files (e.g., .gitkeep) but ignore everything else inside these runtime dirs
-uploads/*
-!uploads/.gitkeep
-runs/*
-!runs/.gitkeep
-checkpoints/*
-!checkpoints/.gitkeep
-exports/*
-!exports/.gitkeep
-reports/*
-!reports/.gitkeep
-wandb/*
-!wandb/.gitkeep
-backend/data/hf_cache/
-backend/.env
