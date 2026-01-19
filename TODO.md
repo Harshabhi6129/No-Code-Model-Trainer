@@ -1,0 +1,4 @@
+- [ ] Update backend/.env to include GOOGLE_API_KEY2 and GOOGLE_API_KEY3
+- [ ] Modify backend/llm_service.py: change _call_gemini to accept api_key parameter
+- [ ] Update all functions in llm_service.py to pass the appropriate API key based on category
+- [ ] Test the changes to ensure API calls work with different keys

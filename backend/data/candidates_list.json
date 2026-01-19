@@ -1,0 +1,902 @@
+[
+  {
+    "model_id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+    "downloads": 6528251,
+    "likes": 852,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cross-encoder/ms-marco-MiniLM-L6-v2",
+    "downloads": 6501180,
+    "likes": 165,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+    "downloads": 4545475,
+    "likes": 733,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "facebook/bart-large-mnli",
+    "downloads": 3604033,
+    "likes": 1483,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "BAAI/bge-reranker-v2-m3",
+    "downloads": 2892404,
+    "likes": 800,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "microsoft/deberta-xlarge-mnli",
+    "downloads": 2747838,
+    "likes": 20,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "ProsusAI/finbert",
+    "downloads": 2250306,
+    "likes": 1024,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "yiyanghkust/finbert-tone",
+    "downloads": 2245585,
+    "likes": 204,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "pysentimiento/robertuito-sentiment-analysis",
+    "downloads": 1598616,
+    "likes": 96,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "microsoft/deberta-large-mnli",
+    "downloads": 1598041,
+    "likes": 25,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cardiffnlp/twitter-xlm-roberta-base-sentiment",
+    "downloads": 1485762,
+    "likes": 240,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "michellejieli/emotion_text_classifier",
+    "downloads": 1319902,
+    "likes": 139,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "facebook/roberta-hate-speech-dynabench-r4-target",
+    "downloads": 1312531,
+    "likes": 92,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "BAAI/bge-reranker-base",
+    "downloads": 1259983,
+    "likes": 215,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "Xuhui/ToxDect-roberta-large",
+    "downloads": 1185026,
+    "likes": 4,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "tomh/toxigen_hatebert",
+    "downloads": 1184853,
+    "likes": 12,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "sileod/deberta-v3-base-tasksource-nli",
+    "downloads": 1160220,
+    "likes": 131,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cross-encoder/ms-marco-TinyBERT-L2-v2",
+    "downloads": 1129027,
+    "likes": 35,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cross-encoder/ms-marco-MiniLM-L2-v2",
+    "downloads": 1093307,
+    "likes": 12,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "BAAI/bge-reranker-large",
+    "downloads": 1076049,
+    "likes": 434,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "mixedbread-ai/mxbai-rerank-xsmall-v1",
+    "downloads": 962569,
+    "likes": 49,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "martin-ha/toxic-comment-model",
+    "downloads": 939875,
+    "likes": 65,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cross-encoder/ms-marco-MiniLM-L4-v2",
+    "downloads": 922882,
+    "likes": 14,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "papluca/xlm-roberta-base-language-detection",
+    "downloads": 891848,
+    "likes": 363,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "textattack/bert-base-uncased-SST-2",
+    "downloads": 851475,
+    "likes": 4,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "qandos0/SentimentArEng",
+    "downloads": 823973,
+    "likes": 0,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cross-encoder/ms-marco-MiniLM-L12-v2",
+    "downloads": 823206,
+    "likes": 84,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "nlptown/bert-base-multilingual-uncased-sentiment",
+    "downloads": 772963,
+    "likes": 439,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "Copycats/koelectra-base-v3-generalized-sentiment-analysis",
+    "downloads": 753341,
+    "likes": 12,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "unitary/toxic-bert",
+    "downloads": 753320,
+    "likes": 205,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "FacebookAI/roberta-large-mnli",
+    "downloads": 698071,
+    "likes": 199,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "j-hartmann/emotion-english-distilroberta-base",
+    "downloads": 672230,
+    "likes": 467,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "madhurjindal/autonlp-Gibberish-Detector-492513457",
+    "downloads": 668416,
+    "likes": 63,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "Alibaba-NLP/gte-reranker-modernbert-base",
+    "downloads": 595459,
+    "likes": 79,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "lxyuan/distilbert-base-multilingual-cased-sentiments-student",
+    "downloads": 575944,
+    "likes": 303,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "cardiffnlp/twitter-roberta-base-sentiment",
+    "downloads": 544662,
+    "likes": 323,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "lucadiliello/BLEURT-20-D12",
+    "downloads": 542388,
+    "likes": 1,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "CAMeL-Lab/bert-base-arabic-camelbert-mix-sentiment",
+    "downloads": 515864,
+    "likes": 7,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "jinaai/jina-reranker-v2-base-multilingual",
+    "downloads": 511538,
+    "likes": 324,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "blanchefort/rubert-base-cased-sentiment-rusentiment",
+    "downloads": 467839,
+    "likes": 14,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "tabularisai/multilingual-sentiment-analysis",
+    "downloads": 461616,
+    "likes": 320,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "SamLowe/roberta-base-go_emotions",
+    "downloads": 451213,
+    "likes": 630,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "eevvgg/StanceBERTa",
+    "downloads": 439124,
+    "likes": 1,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "hkunlp/instructor-xl",
+    "downloads": 408086,
+    "likes": 580,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+    "downloads": 347276,
+    "likes": 1,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "hkunlp/instructor-large",
+    "downloads": 331088,
+    "likes": 524,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis",
+    "downloads": 330322,
+    "likes": 425,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "protectai/deberta-v3-base-prompt-injection-v2",
+    "downloads": 324456,
+    "likes": 81,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "finiteautomata/bertweet-base-sentiment-analysis",
+    "downloads": 322770,
+    "likes": 187,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "michellejieli/NSFW_text_classifier",
+    "downloads": 299258,
+    "likes": 107,
+    "task": "text-classification"
+  },
+  {
+    "model_id": "openai-community/gpt2",
+    "downloads": 10264988,
+    "likes": 3027,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-7B-Instruct",
+    "downloads": 7911867,
+    "likes": 894,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-0.6B",
+    "downloads": 7059495,
+    "likes": 803,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-3B-Instruct",
+    "downloads": 6082899,
+    "likes": 331,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "openai/gpt-oss-20b",
+    "downloads": 6004279,
+    "likes": 3969,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+    "downloads": 5555253,
+    "likes": 490,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+    "downloads": 5205435,
+    "likes": 4988,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Gensyn/Qwen2.5-0.5B-Instruct",
+    "downloads": 4950555,
+    "likes": 27,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "downloads": 4905653,
+    "likes": 742,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-8B",
+    "downloads": 4696641,
+    "likes": 765,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "dphn/dolphin-2.9.1-yi-1.5-34b",
+    "downloads": 4674898,
+    "likes": 51,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-1.5B-Instruct",
+    "downloads": 4478156,
+    "likes": 553,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "openai/gpt-oss-120b",
+    "downloads": 4362909,
+    "likes": 4179,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "facebook/opt-125m",
+    "downloads": 4327397,
+    "likes": 226,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+    "downloads": 3716994,
+    "likes": 1173,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "downloads": 3285563,
+    "likes": 2,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "google/gemma-3-1b-it",
+    "downloads": 3170140,
+    "likes": 722,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "mistralai/Mistral-7B-Instruct-v0.2",
+    "downloads": 3111444,
+    "likes": 3017,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "downloads": 2939820,
+    "likes": 1455,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "meta-llama/Llama-3.2-1B",
+    "downloads": 2592227,
+    "likes": 2190,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "context-labs/meta-llama-Llama-3.2-3B-Instruct-FP16",
+    "downloads": 2523721,
+    "likes": 7,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-4B",
+    "downloads": 2474583,
+    "likes": 461,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "bigscience/bloomz-560m",
+    "downloads": 2198368,
+    "likes": 129,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+    "downloads": 2146690,
+    "likes": 52,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "meta-llama/Meta-Llama-3-8B",
+    "downloads": 2139015,
+    "likes": 6385,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "distilbert/distilgpt2",
+    "downloads": 2101904,
+    "likes": 593,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "downloads": 1860548,
+    "likes": 1469,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-1.5B",
+    "downloads": 1822863,
+    "likes": 144,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+    "downloads": 1800843,
+    "likes": 1826,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "petals-team/StableBeluga2",
+    "downloads": 1681273,
+    "likes": 20,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "vikhyatk/moondream2",
+    "downloads": 1631440,
+    "likes": 1343,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "downloads": 1566079,
+    "likes": 393,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "openai-community/gpt2-large",
+    "downloads": 1403476,
+    "likes": 335,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "sshleifer/tiny-gpt2",
+    "downloads": 1366483,
+    "likes": 33,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "downloads": 1335521,
+    "likes": 876,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-32B-Instruct-AWQ",
+    "downloads": 1332744,
+    "likes": 88,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "microsoft/Phi-3-mini-4k-instruct",
+    "downloads": 1261831,
+    "likes": 1332,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen2.5-7B",
+    "downloads": 1209314,
+    "likes": 245,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-1.7B",
+    "downloads": 1207593,
+    "likes": 328,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "kaitchup/Phi-3-mini-4k-instruct-gptq-4bit",
+    "downloads": 1181261,
+    "likes": 2,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "downloads": 1164211,
+    "likes": 1394,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "inference-net/Schematron-3B",
+    "downloads": 1139166,
+    "likes": 103,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "allenai/OLMo-2-0425-1B",
+    "downloads": 1136132,
+    "likes": 65,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-Reranker-0.6B",
+    "downloads": 1111498,
+    "likes": 261,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "downloads": 1051476,
+    "likes": 826,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-32B",
+    "downloads": 1050812,
+    "likes": 579,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Qwen/Qwen3-14B",
+    "downloads": 1042643,
+    "likes": 317,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "google-t5/t5-3b",
+    "downloads": 1024380,
+    "likes": 49,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    "downloads": 1019836,
+    "likes": 733,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "meta-llama/Meta-Llama-3-8B-Instruct",
+    "downloads": 1013168,
+    "likes": 4294,
+    "task": "text-generation"
+  },
+  {
+    "model_id": "Falconsai/nsfw_image_detection",
+    "downloads": 70298537,
+    "likes": 893,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "dima806/fairface_age_image_detection",
+    "downloads": 26060793,
+    "likes": 52,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/mobilenetv3_small_100.lamb_in1k",
+    "downloads": 21638047,
+    "likes": 43,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/resnet50.a1_in1k",
+    "downloads": 3959129,
+    "likes": 39,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "google/vit-base-patch16-224",
+    "downloads": 3364783,
+    "likes": 896,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/resnet18.a1_in1k",
+    "downloads": 2877303,
+    "likes": 12,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "apple/mobilevit-small",
+    "downloads": 1433348,
+    "likes": 82,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "Freepik/nsfw_image_detector",
+    "downloads": 1331104,
+    "likes": 47,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/efficientnet_b0.ra_in1k",
+    "downloads": 1032054,
+    "likes": 4,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "rizvandwiki/gender-classification",
+    "downloads": 1029272,
+    "likes": 54,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "microsoft/beit-base-patch16-224-pt22k-ft22k",
+    "downloads": 963288,
+    "likes": 79,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "nvidia/mit-b2",
+    "downloads": 866591,
+    "likes": 4,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vit_small_patch16_224.augreg_in21k_ft_in1k",
+    "downloads": 694520,
+    "likes": 4,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnextv2_nano.fcmae_ft_in22k_in1k",
+    "downloads": 614026,
+    "likes": 3,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vit_base_patch16_224.augreg2_in21k_ft_in1k",
+    "downloads": 471205,
+    "likes": 12,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/resnet34.a1_in1k",
+    "downloads": 461156,
+    "likes": 1,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "smp-hub/efficientnet-b0.imagenet",
+    "downloads": 452681,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "amunchet/rorshark-vit-base",
+    "downloads": 452178,
+    "likes": 1,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vit_tiny_patch16_224.augreg_in21k_ft_in1k",
+    "downloads": 431545,
+    "likes": 3,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "nateraw/vit-age-classifier",
+    "downloads": 417872,
+    "likes": 141,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "rizvandwiki/gender-classification-2",
+    "downloads": 417695,
+    "likes": 36,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/resnet50.ram_in1k",
+    "downloads": 378904,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/wide_resnet50_2.racm_in1k",
+    "downloads": 374229,
+    "likes": 2,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnext_tiny.in12k_ft_in1k",
+    "downloads": 364761,
+    "likes": 4,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vgg19.tv_in1k",
+    "downloads": 360922,
+    "likes": 6,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "microsoft/swinv2-tiny-patch4-window16-256",
+    "downloads": 360029,
+    "likes": 12,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnext_femto.d1_in1k",
+    "downloads": 342477,
+    "likes": 1,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vit_base_patch16_224.augreg_in21k",
+    "downloads": 333303,
+    "likes": 9,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnext_large.fb_in22k_ft_in1k",
+    "downloads": 287126,
+    "likes": 2,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/rexnet_150.nav_in1k",
+    "downloads": 263986,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "skshmjn/Pokemon-classifier-gen9-1025",
+    "downloads": 263810,
+    "likes": 1,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "microsoft/resnet-50",
+    "downloads": 253378,
+    "likes": 460,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "AdamCodd/vit-base-nsfw-detector",
+    "downloads": 213918,
+    "likes": 67,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "trpakov/vit-face-expression",
+    "downloads": 202752,
+    "likes": 86,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnext_base.clip_laion2b_augreg_ft_in12k_in1k",
+    "downloads": 178432,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "microsoft/resnet-18",
+    "downloads": 176781,
+    "likes": 61,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vit_base_patch32_384.augreg_in21k_ft_in1k",
+    "downloads": 176777,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/resnet50.fb_swsl_ig1b_ft_in1k",
+    "downloads": 174624,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "haywoodsloan/ai-image-detector-dev-deploy",
+    "downloads": 169886,
+    "likes": 5,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/mobilenetv3_large_100.ra_in1k",
+    "downloads": 168105,
+    "likes": 33,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/deit_tiny_patch16_224.fb_in1k",
+    "downloads": 164931,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/regnety_032.ra_in1k",
+    "downloads": 164295,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/vit_tiny_patch16_224.augreg_in21k",
+    "downloads": 159465,
+    "likes": 1,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnext_base.fb_in22k_ft_in1k",
+    "downloads": 158952,
+    "likes": 3,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/edgenext_small.usi_in1k",
+    "downloads": 138311,
+    "likes": 6,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/mobilenetv3_small_075.lamb_in1k",
+    "downloads": 137892,
+    "likes": 1,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/deit_small_patch16_224.fb_in1k",
+    "downloads": 137701,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "Qdrant/clip-ViT-B-32-vision",
+    "downloads": 136995,
+    "likes": 8,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "timm/convnext_nano.in12k_ft_in1k",
+    "downloads": 127017,
+    "likes": 0,
+    "task": "image-classification"
+  },
+  {
+    "model_id": "google/vit-hybrid-base-bit-384",
+    "downloads": 114701,
+    "likes": 6,
+    "task": "image-classification"
+  }
+]

@@ -1,0 +1,26 @@
+text,label
+"I want to return my order because it arrived damaged.",return_request
+"How do I reset my password? I forgot it.",account_issue
+"Where is my package? It was supposed to be here yesterday.",order_status
+"The product stopped working after one day. I want a refund.",refund_request
+"Can I change my shipping address?",shipping_change
+"I was charged twice for the same item.",billing_issue
+"The size is too small, can I exchange it?",exchange_request
+"My account is locked and I can't login.",account_issue
+"When will the black color be back in stock?",product_inquiry
+"I received the wrong item in my package.",order_error
+"How do I cancel my subscription?",subscription_cancel
+"Is there a discount code for new customers?",sales_inquiry
+"The app keeps crashing when I try to checkout.",technical_issue
+"I need a copy of my invoice for the last order.",billing_issue
+"Do you ship to Canada?",shipping_inquiry
+"I want to speak to a manager immediately.",complaint
+"The delivery driver was very rude.",complaint
+"How do I update my credit card information?",account_issue
+"Can I track my order without an account?",order_status
+"I want to delete my account permanently.",account_issue
+"The coupon code is not working.",sales_inquiry
+"I haven't received my refund yet.",refund_request
+"Can I add an item to my existing order?",order_modification
+"The manual is missing from the box.",product_issue
+"Is this product compatible with Mac?",product_inquiry

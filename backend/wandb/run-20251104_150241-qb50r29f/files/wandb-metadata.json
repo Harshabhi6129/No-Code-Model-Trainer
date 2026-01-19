@@ -1,0 +1,41 @@
+{
+  "os": "macOS-15.3-arm64-arm-64bit",
+  "python": "CPython 3.12.9",
+  "startedAt": "2025-11-04T20:02:41.101626Z",
+  "args": [
+    "app:app",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "8000",
+    "--reload"
+  ],
+  "program": "/Users/harshaabhinavkusampudi/Documents/Agent/backend/venv/bin/uvicorn",
+  "codePath": "venv/bin/uvicorn",
+  "codePathLocal": "venv/bin/uvicorn",
+  "email": "harshaab@buffalo.edu",
+  "root": "/Users/harshaabhinavkusampudi/Documents/Agent/backend",
+  "host": "Harshas-MacBook-Air-5.local",
+  "executable": "/Users/harshaabhinavkusampudi/Documents/Agent/backend/venv/bin/python3",
+  "cpu_count": 8,
+  "cpu_count_logical": 8,
+  "disk": {
+    "/": {
+      "total": "245107195904",
+      "used": "236669476864"
+    }
+  },
+  "memory": {
+    "total": "8589934592"
+  },
+  "apple": {
+    "name": "Apple M3",
+    "ecpuCores": 4,
+    "pcpuCores": 4,
+    "gpuCores": 8,
+    "memoryGb": 8,
+    "swapTotalBytes": "8053063680",
+    "ramTotalBytes": "8589934592"
+  },
+  "writerId": "qmlh7ljg3y1qmh3i7zvcv2k7knryg1li"
+}

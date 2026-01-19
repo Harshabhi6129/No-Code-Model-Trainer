@@ -1,0 +1,26 @@
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_setup.py:_flush():81] Current SDK version is 0.22.3
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_setup.py:_flush():81] Configure stats pid to 17823
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_setup.py:_flush():81] Loading settings from /Users/harshaabhinavkusampudi/.config/wandb/settings
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_setup.py:_flush():81] Loading settings from /Users/harshaabhinavkusampudi/Documents/Agent/backend/wandb/settings
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_init.py:setup_run_log_directory():706] Logging user logs to /Users/harshaabhinavkusampudi/Documents/Agent/backend/wandb/run-20251104_150241-qb50r29f/logs/debug.log
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_init.py:setup_run_log_directory():707] Logging internal logs to /Users/harshaabhinavkusampudi/Documents/Agent/backend/wandb/run-20251104_150241-qb50r29f/logs/debug-internal.log
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():833] calling init triggers
+2025-11-04 15:02:41,103 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():838] wandb.init called with sweep_config: {}
+config: {'dataset_path': 'uploads/09376719-c3cb-475c-b641-fcda07ab9137_test_sentiment.csv', 'model': 'distilbert-base-uncased', 'config': {'epochs': 3, 'batch_size': 16, 'learning_rate': 3e-05, 'warmup_steps': 500, 'max_seq_length': 128, 'weight_decay': 0.01, 'use_peft': True}, '_wandb': {}}
+2025-11-04 15:02:41,104 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():881] starting backend
+2025-11-04 15:02:41,784 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():884] sending inform_init request
+2025-11-04 15:02:41,811 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():892] backend started and connected
+2025-11-04 15:02:41,816 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():962] updated telemetry
+2025-11-04 15:02:41,817 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():986] communicating run to backend with 90.0 second timeout
+2025-11-04 15:02:42,369 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():1033] starting run threads in backend
+2025-11-04 15:02:42,434 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_console_start():2506] atexit reg
+2025-11-04 15:02:42,434 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_redirect():2354] redirect: wrap_raw
+2025-11-04 15:02:42,434 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_redirect():2423] Wrapping output streams.
+2025-11-04 15:02:42,434 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_redirect():2446] Redirects installed.
+2025-11-04 15:02:42,436 INFO    Thread-1 (_train_task):17823 [wandb_init.py:init():1073] run started, returning control to user process
+2025-11-04 15:02:44,293 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_finish():2272] finishing run harshaab-university-at-buffalo/no_code_finetune/qb50r29f
+2025-11-04 15:02:44,293 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_atexit_cleanup():2471] got exitcode: 0
+2025-11-04 15:02:44,293 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_restore():2453] restore
+2025-11-04 15:02:44,293 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_restore():2459] restore done
+2025-11-04 15:02:44,846 INFO    Thread-1 (_train_task):17823 [wandb_run.py:_footer_sync_info():3835] logging synced files
