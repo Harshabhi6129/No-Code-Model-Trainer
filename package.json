@@ -1,0 +1,10 @@
+{
+  "name": "modelforge",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @modelforge/web dev",
+    "build": "pnpm --filter @modelforge/web build",
+    "type-check": "pnpm --filter @modelforge/web exec tsc --noEmit",
+    "lint": "pnpm --filter @modelforge/web lint"
+  }
+}

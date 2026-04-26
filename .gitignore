@@ -8,13 +8,19 @@ env/
 venv/
 backend/venv/
 .venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # --- Node / Frontend ---
 node_modules/
-nlp-finetune-ui/node_modules/
+**/node_modules/
 dist/
-.npm/
 .next/
+.turbo/
+.npm/
+.pnpm-store/
 
 # --- Vercel ---
 .vercel/
@@ -30,13 +36,18 @@ exports/
 reports/
 wandb/
 backend/data/hf_cache/
+backend/data/
 
 # --- Environment / Secrets ---
 .env
 .env.*
+!.env.example
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 *.log
 *.tmp
+
+# --- Claude Code ---
+.claude/settings.local.json
