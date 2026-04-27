@@ -19,7 +19,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
 interface AgentMessage { agent: string; success: boolean; message: string; output: Record<string, unknown> }
 interface UploadResult {
-  file_id: string; file_path: string; filename: string; rows: number
+  file_id: string; filename: string; rows: number
   columns: string[]; text_columns: string[]; label_columns: string[]; unique_labels: string[]
 }
 
@@ -107,7 +107,7 @@ export default function TrainPage() {
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: intent, dataset_path: upload?.file_path ?? null }),
+        body: JSON.stringify({ message: intent, file_id: upload?.file_id ?? null }),
       })
       if (!res.ok) throw new Error(await res.text())
 

@@ -1,5 +1,7 @@
 """ModelForge API — FastAPI entrypoint."""
+import json
 import logging
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -16,16 +18,26 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ModelForge API", version="0.2.0")
 
+# Read allowed origins from env; fall back to localhost for local dev
+_CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGIN", "http://localhost:3000").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://*.vercel.app"],
+    allow_origins=_CORS_ORIGINS,
+    # Wildcard subdomains need allow_origin_regex, not allow_origins
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-UPLOADS_DIR = Path("uploads")
-UPLOADS_DIR.mkdir(exist_ok=True)
+# Resolve uploads dir relative to this file so it's stable regardless of cwd
+UPLOADS_DIR = Path(os.getenv("UPLOAD_DIR", str(Path(__file__).parent / "uploads")))
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory file registry: file_id → absolute Path.
+# Stage 3: replace with a DB lookup so registrations survive restarts.
+_FILE_REGISTRY: dict[str, Path] = {}
 
 from services.socket_manager import manager as socket_manager
 
@@ -48,20 +60,27 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     if not file.filename:
         raise HTTPException(400, "No filename provided")
 
+    # Sanitize: strip any path separators the client might inject
+    safe_name = Path(file.filename).name
+    if not safe_name:
+        raise HTTPException(400, "Invalid filename")
+
     allowed = {".csv", ".json", ".jsonl", ".txt"}
-    suffix = Path(file.filename).suffix.lower()
+    suffix = Path(safe_name).suffix.lower()
     if suffix not in allowed:
         raise HTTPException(400, f"Unsupported file type {suffix}. Allowed: {', '.join(allowed)}")
 
     file_id = str(uuid.uuid4())
-    dest = UPLOADS_DIR / f"{file_id}_{file.filename}"
+    dest = UPLOADS_DIR / f"{file_id}{suffix}"  # no user-supplied name in path
     content = await file.read()
     dest.write_bytes(content)
+    _FILE_REGISTRY[file_id] = dest
 
     try:
         df = pd.read_csv(dest) if suffix == ".csv" else pd.read_json(dest)
     except Exception as exc:
         dest.unlink(missing_ok=True)
+        _FILE_REGISTRY.pop(file_id, None)
         raise HTTPException(422, f"Could not parse file: {exc}") from exc
 
     text_cols = [
@@ -73,10 +92,10 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
         if c.lower() in {"label", "target", "class", "sentiment", "category"}
     ]
 
+    # Never return the server-side path — clients get only the opaque file_id
     return {
         "file_id": file_id,
-        "file_path": str(dest),
-        "filename": file.filename,
+        "filename": safe_name,
         "rows": len(df),
         "columns": list(df.columns),
         "text_columns": text_cols,
@@ -90,7 +109,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
 
 class ChatRequest(BaseModel):
     message: str
-    dataset_path: str | None = None
+    file_id: str | None = None  # opaque id — backend resolves to path
     run_id: str | None = None
 
     @field_validator("message")
@@ -101,9 +120,21 @@ class ChatRequest(BaseModel):
         return v.strip()
 
 
+def _resolve_file_id(file_id: str | None) -> str | None:
+    """Return the absolute path for a file_id, or None if not provided."""
+    if not file_id:
+        return None
+    path = _FILE_REGISTRY.get(file_id)
+    if path is None:
+        raise HTTPException(404, "Dataset not found. Please re-upload your file.")
+    return str(path)
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest) -> StreamingResponse:
     """Stream agent responses as Server-Sent Events."""
+    dataset_path = _resolve_file_id(req.file_id)
+
     agents_path = Path(__file__).parent.parent / "agents"
     if str(agents_path) not in sys.path:
         sys.path.insert(0, str(agents_path))
@@ -114,9 +145,8 @@ async def chat(req: ChatRequest) -> StreamingResponse:
             pipeline = TrainingPipeline()
             async for result in pipeline.run_streaming(
                 user_intent=req.message,
-                dataset_path=req.dataset_path,
+                dataset_path=dataset_path,
             ):
-                import json
                 data = json.dumps({
                     "agent": result.agent_name,
                     "success": result.success,
@@ -127,9 +157,9 @@ async def chat(req: ChatRequest) -> StreamingResponse:
                 if not result.success:
                     break
         except Exception as exc:
-            import json
             logger.error("Agent pipeline error: %s", exc, exc_info=True)
-            yield f"data: {json.dumps({'agent': 'System', 'success': False, 'message': str(exc), 'output': {}})}\n\n"
+            # Return a generic message — full details stay in server logs
+            yield f"data: {json.dumps({'agent': 'System', 'success': False, 'message': 'An internal error occurred. Please try again.', 'output': {}})}\n\n"
         finally:
             yield "data: [DONE]\n\n"
 
@@ -137,8 +167,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 
 
 class TrainRequest(BaseModel):
-    file_id: str
-    file_path: str
+    file_id: str  # opaque id only — no client-supplied paths
     model_id: str = "distilbert-base-uncased"
     task_type: str = "text_classification"
     parameters: dict[str, Any] = {}
@@ -157,8 +186,13 @@ async def start_training_job(req: TrainRequest) -> dict[str, str]:
     import asyncio
     from services.trainer import start_training
 
-    if not Path(req.file_path).exists():
-        raise HTTPException(404, f"Dataset file not found: {req.file_path}")
+    file_path = _FILE_REGISTRY.get(req.file_id)
+    if file_path is None:
+        raise HTTPException(404, "Dataset not found. Please re-upload your file.")
+
+    # Confirm the resolved path is still within uploads dir (defence-in-depth)
+    if not str(file_path).startswith(str(UPLOADS_DIR)):
+        raise HTTPException(400, "Invalid dataset reference.")
 
     job_id = str(uuid.uuid4())
     config = {
@@ -168,7 +202,7 @@ async def start_training_job(req: TrainRequest) -> dict[str, str]:
         "use_cpu": req.use_cpu,
     }
 
-    asyncio.create_task(start_training(config, req.file_path, client_id=job_id))
+    asyncio.create_task(start_training(config, str(file_path), client_id=job_id))
     return {"job_id": job_id, "status": "started"}
 
 

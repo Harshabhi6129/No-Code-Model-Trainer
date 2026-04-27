@@ -22,20 +22,28 @@ class IntentAgent(BaseAgent):
     name = "Intent"
 
     async def run(self, context: AgentContext) -> AgentResult:
-        raw = self._chat(system=SYSTEM, messages=[{"role": "user", "content": context.user_intent}])
+        raw = await self._chat(system=SYSTEM, messages=[{"role": "user", "content": context.user_intent}])
         try:
             spec = json.loads(raw)
         except json.JSONDecodeError:
             return AgentResult(agent_name=self.name, success=False, output={},
                                message="Could not parse task specification. Please rephrase your request.")
 
+        if not isinstance(spec, dict):
+            return AgentResult(agent_name=self.name, success=False, output={},
+                               message="Task specification was not a JSON object. Please rephrase your request.")
+
         context.task_spec = spec
         needs_clarification = spec.get("confidence", 1.0) < 0.7
+
+        # Use .get() with fallbacks so missing keys never raise KeyError
+        task_type = str(spec.get("task_type") or "unspecified").replace("_", " ")
+        base_model = spec.get("base_model_hint") or "a suitable base model"
 
         return AgentResult(
             agent_name=self.name, success=True, output=spec,
             message=spec.get("clarification_needed") or
-                    f"Got it — this is a **{spec['task_type'].replace('_', ' ')}** task. "
-                    f"I'll use `{spec['base_model_hint']}` as the base model.",
+                    f"Got it — this is a **{task_type}** task. "
+                    f"I'll use `{base_model}` as the base model.",
             next_agent=None if needs_clarification else "Data",
         )

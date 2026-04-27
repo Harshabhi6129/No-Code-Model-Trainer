@@ -21,28 +21,41 @@ Output ONLY valid JSON:
   "reasoning": "<1-2 sentence explanation of choices>"
 }"""
 
+_REQUIRED = {"base_model", "training_approach", "num_epochs", "learning_rate", "batch_size"}
+
 
 class ModelAgent(BaseAgent):
     name = "Model"
 
     async def run(self, context: AgentContext) -> AgentResult:
         prompt = json.dumps({"task_spec": context.task_spec, "data_profile": context.data_profile}, indent=2)
-        raw = self._chat(system=SYSTEM, messages=[{"role": "user", "content": prompt}])
+        raw = await self._chat(system=SYSTEM, messages=[{"role": "user", "content": prompt}])
         try:
             recipe = json.loads(raw)
         except json.JSONDecodeError:
             return AgentResult(agent_name=self.name, success=False, output={},
                                message="Could not determine training recipe. Please try again.")
 
+        if not isinstance(recipe, dict):
+            return AgentResult(agent_name=self.name, success=False, output={},
+                               message="Model recipe was not a JSON object. Please try again.")
+
+        missing = _REQUIRED - recipe.keys()
+        if missing:
+            return AgentResult(agent_name=self.name, success=False, output=recipe,
+                               message=f"Model recipe missing required fields: {', '.join(missing)}. Please try again.")
+
         context.model_recipe = recipe
-        approach = recipe["training_approach"].replace("_", " ").upper()
+        approach = str(recipe.get("training_approach", "unknown")).replace("_", " ").upper()
+        base_model = recipe.get("base_model", "unknown model")
+
         return AgentResult(
             agent_name=self.name, success=True, output=recipe,
             message=(
-                f"Selected **`{recipe['base_model']}`** with **{approach}**.\n"
+                f"Selected **`{base_model}`** with **{approach}**.\n"
                 f"{recipe.get('reasoning', '')}\n"
-                f"Training for {recipe['num_epochs']} epochs, lr={recipe['learning_rate']}, "
-                f"batch_size={recipe['batch_size']}."
+                f"Training for {recipe.get('num_epochs')} epochs, "
+                f"lr={recipe.get('learning_rate')}, batch_size={recipe.get('batch_size')}."
             ),
             next_agent="Train",
         )
