@@ -42,6 +42,11 @@ _FILE_REGISTRY: dict[str, Path] = {}
 from services.socket_manager import manager as socket_manager
 
 
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.websocket("/ws/{job_id}")
 async def websocket_endpoint(websocket: WebSocket, job_id: str):
     await socket_manager.connect(job_id, websocket)
