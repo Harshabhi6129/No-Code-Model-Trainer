@@ -21,8 +21,13 @@ class DataAgent(BaseAgent):
 
         profile = self._profile(path, context.task_spec)
         context.data_profile = profile
-        issues = profile.get("issues", [])
 
+        # Empty dataset: _profile returns a minimal dict without input_col / avg_input_len
+        if profile.get("num_rows", 0) == 0:
+            return AgentResult(agent_name=self.name, success=False, output=profile,
+                               message="The uploaded dataset is empty. Please upload a file with at least one row.")
+
+        issues = profile.get("issues", [])
         msg_parts = [
             f"Dataset: **{profile['num_rows']:,} rows**, {profile['num_cols']} columns.",
             f"Input column: `{profile['input_col']}` — avg {profile['avg_input_len']:.0f} chars.",
@@ -48,7 +53,7 @@ class DataAgent(BaseAgent):
             with open(path, encoding="utf-8") as f:
                 content = f.read().strip()
                 rows = json.loads(content) if content.startswith("[") else \
-                       [json.loads(l) for l in content.splitlines() if l.strip()]
+                       [json.loads(ln) for ln in content.splitlines() if ln.strip()]
 
         if not rows:
             return {"num_rows": 0, "num_cols": 0, "issues": ["Empty dataset"]}

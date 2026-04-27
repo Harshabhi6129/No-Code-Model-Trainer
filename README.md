@@ -5,7 +5,7 @@ ModelForge is an **agent-native** AI model training platform. You tell it your p
 
 ## Repo layout
 ```
-apps/web/    Next.js 15 + shadcn/ui + Tailwind
+apps/web/    Next.js 16 + shadcn/ui + Tailwind
 backend/     FastAPI — WebSocket streaming, training job API
 agents/      Claude Agent SDK — orchestrated training pipeline
 ```

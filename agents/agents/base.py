@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import abc
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import anthropic
 
-MODEL = "claude-sonnet-4-6"
+# Readable from env so model can be swapped without a code change
+MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6"
 
 
 @dataclass
@@ -34,10 +36,11 @@ class AgentResult:
 class BaseAgent(abc.ABC):
     name: str
 
-    def __init__(self, client: "anthropic.Anthropic | None" = None) -> None:
+    def __init__(self, client: "anthropic.AsyncAnthropic | None" = None) -> None:
         if client is None:
             import anthropic as _anthropic
-            client = _anthropic.Anthropic()
+            # AsyncAnthropic so _chat never blocks the event loop
+            client = _anthropic.AsyncAnthropic()
         self.client = client
 
     @abc.abstractmethod
@@ -47,8 +50,8 @@ class BaseAgent(abc.ABC):
         result = await self.run(context)
         yield result.message
 
-    def _chat(self, system: str, messages: list[dict[str, Any]]) -> str:
-        response = self.client.messages.create(
+    async def _chat(self, system: str, messages: list[dict[str, Any]]) -> str:
+        response = await self.client.messages.create(
             model=MODEL, max_tokens=2048, system=system, messages=messages,
         )
         return response.content[0].text  # type: ignore[union-attr]
