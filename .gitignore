@@ -26,17 +26,16 @@ dist/
 .vercel/
 
 # --- Data & Artifacts ---
-uploads/*
-!uploads/.gitkeep
+uploads/
 backend/uploads/*
 !backend/uploads/.gitkeep
 backend/runs/
+backend/wandb/
 checkpoints/
 exports/
 reports/
-wandb/
-backend/data/hf_cache/
-backend/data/
+*.bin
+*.pkl
 
 # --- Environment / Secrets ---
 .env
