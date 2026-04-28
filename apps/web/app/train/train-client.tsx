@@ -78,7 +78,8 @@ export function TrainClient() {
     if (file) handleFile(file)
   }
 
-  const completedAgents = messages.filter((m) => m.success).map((m) => m.agent)
+  const TOTAL_AGENTS = 5
+  const completedAgents = messages.filter((m) => m.success && (m.output as Record<string,unknown>)?.final !== false).map((m) => m.agent)
 
   async function handleSend() {
     if (!message.trim()) return
@@ -126,7 +127,17 @@ export function TrainClient() {
           if (payload === "[DONE]") break
           try {
             const msg: AgentMessage = JSON.parse(payload)
-            allMessages.push(msg)
+            // For agents that stream progress (Train), replace the last
+            // message from that agent if it was a non-final keepalive.
+            const lastIdx = allMessages.findLastIndex((m) => m.agent === msg.agent)
+            const lastWasKeepalive =
+              lastIdx >= 0 &&
+              (allMessages[lastIdx].output as Record<string, unknown>)?.final === false
+            if (lastWasKeepalive) {
+              allMessages[lastIdx] = msg
+            } else {
+              allMessages.push(msg)
+            }
             setMessages([...allMessages])
           } catch {}
         }
@@ -135,13 +146,33 @@ export function TrainClient() {
       const success = allMessages.every((m) => m.success)
       if (newRunId) {
         const lastMsg = allMessages[allMessages.length - 1]
+        const intentOut  = (allMessages.find(m => m.agent === "Intent")?.output ?? {}) as Record<string, unknown>
+        const modelOut   = (allMessages.find(m => m.agent === "Model")?.output  ?? {}) as Record<string, unknown>
+        const trainOut   = (allMessages.find(m => m.agent === "Train" && (m.output as Record<string, unknown>)?.final !== false)?.output ?? {}) as Record<string, unknown>
+        const evalOut    = (allMessages.find(m => m.agent === "Eval")?.output   ?? {}) as Record<string, unknown>
+
+        // Metrics: prefer EvalAgent output (includes Claude interpretation);
+        // fall back to TrainAgent raw metrics if Eval didn't run.
+        const metricsSource = Object.keys(evalOut).length > 0 ? evalOut : trainOut
+        const metrics = {
+          accuracy:     metricsSource.accuracy     ?? null,
+          f1:           metricsSource.f1           ?? null,
+          precision:    metricsSource.precision    ?? null,
+          recall:       metricsSource.recall       ?? null,
+          per_class_f1: metricsSource.per_class_f1 ?? {},
+          evaluation_grade: (evalOut as Record<string,unknown>).evaluation_grade ?? null,
+          summary:          (evalOut as Record<string,unknown>).summary          ?? null,
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (supabase as any).from("runs").update({
-          status: success ? "completed" : "failed",
-          task_type: (allMessages.find(m => m.agent === "Intent")?.output as Record<string,unknown>)?.task_type as string ?? null,
-          model_id: (allMessages.find(m => m.agent === "Model")?.output as Record<string,unknown>)?.base_model as string ?? null,
-          intent_spec: allMessages.find(m => m.agent === "Intent")?.output ?? {},
-          model_recipe: allMessages.find(m => m.agent === "Model")?.output ?? {},
+          status:       success ? "completed" : "failed",
+          task_type:    intentOut.task_type as string ?? null,
+          model_id:     (modelOut.base_model ?? intentOut.base_model_hint) as string ?? null,
+          intent_spec:  intentOut,
+          model_recipe: modelOut,
+          metrics:      metrics,
+          artifact_path: (trainOut.model_path as string) ?? null,
           completed_at: new Date().toISOString(),
           error_message: success ? null : (lastMsg?.message ?? null),
         }).eq("id", newRunId)
@@ -286,9 +317,9 @@ export function TrainClient() {
               <div className="px-6 shrink-0">
                 <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
                   <span>Pipeline running…</span>
-                  <span>{completedAgents.length} / 3 agents done</span>
+                  <span>{completedAgents.length} / {TOTAL_AGENTS} agents done</span>
                 </div>
-                <Progress value={(completedAgents.length / 3) * 100} className="h-1.5" />
+                <Progress value={(completedAgents.length / TOTAL_AGENTS) * 100} className="h-1.5" />
               </div>
             )}
 

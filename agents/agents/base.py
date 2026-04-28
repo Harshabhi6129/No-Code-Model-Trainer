@@ -46,6 +46,10 @@ class BaseAgent(abc.ABC):
     @abc.abstractmethod
     async def run(self, context: AgentContext) -> AgentResult: ...
 
+    async def run_stream(self, context: AgentContext) -> AsyncIterator[AgentResult]:
+        """Default: single result. Override in agents that emit progress events."""
+        yield await self.run(context)
+
     async def stream(self, context: AgentContext) -> AsyncIterator[str]:
         result = await self.run(context)
         yield result.message
