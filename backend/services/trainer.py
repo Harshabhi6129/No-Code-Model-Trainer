@@ -1,283 +1,199 @@
 """
-Training Orchestrator - NON-BLOCKING version with proper asyncio threading.
+Legacy REST training path (/train endpoint).
+Uses HuggingFace Trainer directly with WebSocket streaming.
+The agent pipeline (/chat endpoint) is the production path for new runs.
 """
-import os
-import uuid
-import pandas as pd
 import asyncio
-from pathlib import Path
-from typing import Dict, Any
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    Trainer,
-    TrainingArguments,
-    DataCollatorWithPadding
-)
-from datasets import Dataset, load_dataset
 import logging
+import uuid
+from pathlib import Path
+from typing import Any
 
-from services.callbacks import WebSocketCallback
-from services.socket_manager import manager as socket_manager
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Output directory for trained models
-from core.config import OUTPUT_DIR as OUTPUTS_DIR
+# Resolved so it's stable regardless of cwd
+_RUNS_DIR = Path(__file__).parent.parent / "runs"
 
 
-def _blocking_train_logic(job_id: str, config: Dict[str, Any], dataset_path: str, loop=None):
+async def start_training(config: dict[str, Any], dataset_path: str, client_id: str | None = None) -> str:
     """
-    BLOCKING function that runs in a thread pool.
-    Contains all the synchronous HuggingFace operations.
+    Async wrapper — runs the blocking HF Trainer in a thread pool.
+    Streams progress updates to the client via WebSocket.
     """
-    output_dir = OUTPUTS_DIR / job_id
-    output_dir.mkdir(exist_ok=True)
-    
-    def log_sync(msg):
-        """Helper to send logs via WebSocket from sync thread"""
+    from services.socket_manager import manager as socket_manager
+    from services.training_monitor import TrainingMonitor
+    from services.training_controller import create_controller
+
+    job_id = client_id or str(uuid.uuid4())
+
+    try:
+        await socket_manager.send_status(job_id, "initializing", "Preparing training environment…")
+        loop = asyncio.get_running_loop()
+
+        result = await asyncio.to_thread(
+            _blocking_train,
+            job_id=job_id,
+            config=config,
+            dataset_path=dataset_path,
+            socket_manager=socket_manager,
+            loop=loop,
+        )
+
+        await socket_manager.send_completion(job_id, success=True, model_path=result.get("model_path", ""))
+        logger.info("[%s] Training completed", job_id)
+        return job_id
+
+    except Exception as exc:
+        logger.error("[%s] Training failed: %s", job_id, exc, exc_info=True)
+        from services.socket_manager import manager as _sm
+        await _sm.broadcast_json(job_id, {
+            "type": "error",
+            "message": "Training failed — check server logs for details.",
+            "error_type": type(exc).__name__,
+        })
+        raise
+
+
+def _blocking_train(
+    *,
+    job_id: str,
+    config: dict[str, Any],
+    dataset_path: str,
+    socket_manager: Any,
+    loop: Any,
+) -> dict[str, Any]:
+    """Blocking HF Trainer — must be called via asyncio.to_thread()."""
+    try:
+        import torch
+        from transformers import (
+            AutoTokenizer,
+            AutoModelForSequenceClassification,
+            Trainer,
+            TrainingArguments,
+            DataCollatorWithPadding,
+        )
+        from datasets import Dataset
+    except ImportError as exc:
+        raise RuntimeError(
+            "Training libraries not installed. Run: pip install torch transformers datasets"
+        ) from exc
+
+    def _ws(msg: str) -> None:
         if loop:
             asyncio.run_coroutine_threadsafe(
-                socket_manager.send_status(job_id, "processing", msg),
-                loop
+                socket_manager.send_status(job_id, "processing", msg), loop
             )
-        logger.info(f"[{job_id}] {msg}")
+        logger.info("[%s] %s", job_id, msg)
 
-    try:
-        # Extract configuration
-        model_id = config.get('model_id', 'distilbert-base-uncased')
-        params = config.get('parameters', {})
-        
-        log_sync(f"🚀 Starting Job Setup...")
-        
-        # Load tokenizer
-        log_sync("⬇️ Downloading Tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            use_fast=True
-        )
-        
-        # Load and tokenize dataset
-        log_sync(f"📂 Reading Dataset from {dataset_path}...")
-        
-        if not dataset_path or not Path(dataset_path).exists():
-            log_sync("⚠️ Dataset path invalid, using debug dataset")
-            dataset = load_dataset("glue", "sst2", split="train[:50]")
-            dataset = dataset.rename_column("sentence", "text")
-            num_labels = 2
-        else:
-            # Load CSV
-            df = pd.read_csv(dataset_path)
-            log_sync(f"✅ Loaded CSV. Columns: {df.columns.tolist()}")
-            
-            log_sync(f"🧠 Analyzing Columns...")
-            
-            # Heuristic column mapping
-            text_col = None
-            label_col = None
-            
-            # Find text column: longest average length
-            text_cols = []
-            for col in df.columns:
-                if df[col].dtype == 'object':
-                    avg_len = df[col].astype(str).str.len().mean()
-                    text_cols.append((col, avg_len))
-            
-            if text_cols:
-                text_col = max(text_cols, key=lambda x: x[1])[0]
-            
-            # Find label column: few unique values
-            for col in df.columns:
-                if col != text_col:
-                    unique_count = df[col].nunique()
-                    if unique_count < 100:
-                        label_col = col
-                        break
-            
-            if not text_col or not label_col:
-                raise ValueError(f"Could not auto-detect columns. Found: {df.columns.tolist()}")
-            
-            log_sync(f"✅ Detected - Text: {text_col}, Label: {label_col}")
-            
-            # Create Dataset
-            df_subset = df[[text_col, label_col]].copy()
-            df_subset.columns = ['text', 'label']
-            
-            # Convert labels to integers
-            if df_subset['label'].dtype == 'object':
-                df_subset['label'] = pd.Categorical(df_subset['label']).codes
-            
-            num_labels = int(df_subset['label'].nunique())
-            dataset = Dataset.from_pandas(df_subset)
-            
-            # Dry Run Safety
-            if len(dataset) > 0:
-                log_sync(f"👀 First row sample: {dataset[0]}")
-        
-        # Tokenize
-        log_sync("✂️ Tokenizing Data...")
-        def tokenize_function(examples):
-            return tokenizer(
-                examples["text"],
-                padding="max_length",
-                truncation=True,
-                max_length=512
-            )
-        
-        tokenized_dataset = dataset.map(tokenize_function, batched=True)
-        log_sync(f"✅ Dataset ready: {len(tokenized_dataset)} samples, {num_labels} labels")
-        
-        # Load model with correct num_labels
-        log_sync(f"⬇️ Downloading Model {model_id} (This may take a minute)...")
-        log_sync(f"🔓 Loading custom model architecture for {model_id}...")
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_id,
-            num_labels=num_labels,
-            trust_remote_code=True,
-            ignore_mismatched_sizes=True
-        )
-        
-        # Extract hyperparameters
-        learning_rate = float(params.get('learning_rate', {}).get('value', 2e-5))
-        num_epochs = int(params.get('num_epochs', {}).get('value', 3))
-        batch_size = int(params.get('batch_size', {}).get('value', 8))
-        weight_decay = float(params.get('weight_decay', {}).get('value', 0.01))
-        
-        logger.info(f"[{job_id}] Hyperparams - LR: {learning_rate}, Epochs: {num_epochs}, BS: {batch_size}")
-        
-        use_cpu = config.get('use_cpu', False)
-        if use_cpu:
-            log_sync("Forcing CPU training (no_cuda=True)")
+    output_dir = _RUNS_DIR / job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Training arguments
-        training_args = TrainingArguments(
-            output_dir=str(output_dir),
-            num_train_epochs=num_epochs,
-            per_device_train_batch_size=batch_size,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            logging_steps=10,
-            save_steps=500,
-            eval_strategy="no",
-            save_strategy="epoch",
-            load_best_model_at_end=False,
-            report_to="none",
-            no_cuda=use_cpu
-        )
-        
-        # Data collator
-        data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-        
-        # Initialize AI Training Monitor for real-time insights
-        from services.training_monitor import TrainingMonitor
-        
-        log_sync("🔥 Starting Training Loop...")
-        from services.training_controller import create_controller
-        from services.commentator import AICommentator
-        
-        training_monitor = TrainingMonitor(socket_manager, job_id, window_size=10)
-        
-        # Initialize Training Controller for pause/resume and hot-swap
-        training_controller = create_controller(job_id)
-        
-        # Initialize AI Commentator for natural language updates
-        ai_commentator = AICommentator(socket_manager, job_id, trigger_interval=20)
-        
-        # Initialize custom callback with all AI services
-        ws_callback = WebSocketCallback(
-            job_id,
-            socket_manager,
-            training_monitor,
-            training_controller,
-            ai_commentator
-        )
-        
-        # Create Trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=tokenized_dataset,
-            tokenizer=tokenizer,
-            data_collator=data_collator,
-            callbacks=[ws_callback]
-        )
-        
-        # Connect trainer to controller for hot-swap capability
-        training_controller.trainer = trainer
-        
-        # THIS IS THE BLOCKING CALL
-        trainer.train()
-        
-        # Save final model
-        final_model_path = output_dir / "final_model"
-        trainer.save_model(str(final_model_path))
-        tokenizer.save_pretrained(str(final_model_path))
-        
-        logger.info(f"[{job_id}] Training completed successfully")
-        
-        return {
-            'success': True,
-            'model_path': str(final_model_path)
-        }
-        
-    except Exception as e:
-        logger.error(f"[{job_id}] Training failed: {e}", exc_info=True)
-        raise
+    model_id = config.get("model_id", "distilbert-base-uncased")
+    params = config.get("parameters", {})
+    use_cpu = config.get("use_cpu", False)
+
+    _ws(f"Loading tokenizer: {model_id}")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+
+    _ws(f"Reading dataset: {dataset_path}")
+    path = Path(dataset_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        df = pd.read_csv(path)
+    elif suffix in (".json", ".jsonl"):
+        df = pd.read_json(path, lines=(suffix == ".jsonl"))
+    else:
+        raise ValueError(f"Unsupported file format: {suffix}")
+
+    # Auto-detect columns
+    text_col = max(
+        (c for c in df.columns if df[c].dtype == "object"),
+        key=lambda c: df[c].astype(str).str.len().mean(),
+        default=None,
+    )
+    label_col = next(
+        (c for c in df.columns if c != text_col and df[c].nunique() < 100),
+        None,
+    )
+    if not text_col or not label_col:
+        raise ValueError(f"Cannot auto-detect text/label columns. Found: {list(df.columns)}")
+
+    _ws(f"Detected text='{text_col}', label='{label_col}'")
+    df = df[[text_col, label_col]].dropna().rename(columns={text_col: "text", label_col: "label"})
+    if df["label"].dtype == "object":
+        df["label"] = pd.Categorical(df["label"]).codes
+    num_labels = int(df["label"].nunique())
+    dataset = Dataset.from_pandas(df)
+
+    def _tokenize(batch: dict) -> dict:
+        return tokenizer(batch["text"], padding="max_length", truncation=True, max_length=512)
+
+    tokenized = dataset.map(_tokenize, batched=True)
+
+    _ws(f"Loading model {model_id} ({num_labels} labels)…")
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_id, num_labels=num_labels, ignore_mismatched_sizes=True
+    )
+
+    lr = float(_get(params, "learning_rate", 2e-5))
+    epochs = int(_get(params, "num_epochs", 3))
+    bs = int(_get(params, "batch_size", 8))
+    wd = float(_get(params, "weight_decay", 0.01))
+
+    device_str = "cpu" if use_cpu or not torch.cuda.is_available() else "cuda"
+    _ws(f"Training on {device_str} — {epochs} epochs, lr={lr}, batch={bs}")
+
+    args = TrainingArguments(
+        output_dir=str(output_dir / "checkpoints"),
+        num_train_epochs=epochs,
+        per_device_train_batch_size=bs,
+        learning_rate=lr,
+        weight_decay=wd,
+        logging_steps=10,
+        save_strategy="epoch",
+        eval_strategy="no",
+        report_to="none",
+        no_cuda=(device_str == "cpu"),
+        disable_tqdm=True,
+    )
+
+    from services.callbacks import WebSocketCallback
+    from services.training_monitor import TrainingMonitor
+    from services.training_controller import create_controller
+
+    monitor = TrainingMonitor(socket_manager, job_id, window_size=10)
+    controller = create_controller(job_id)
+    callback = WebSocketCallback(job_id, socket_manager, monitor, controller, None)
+
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=tokenized,
+        tokenizer=tokenizer,
+        data_collator=DataCollatorWithPadding(tokenizer),
+        callbacks=[callback],
+    )
+    controller.trainer = trainer
+
+    _ws("Training started…")
+    trainer.train()
+
+    final_path = output_dir / "final_model"
+    trainer.save_model(str(final_path))
+    tokenizer.save_pretrained(str(final_path))
+    _ws(f"Model saved to {final_path}")
+
+    return {"success": True, "model_path": str(final_path)}
 
 
-async def start_training(config: Dict[str, Any], dataset_path: str, client_id: str = None):
-    """
-    Async wrapper that runs training in a thread pool (NON-BLOCKING).
-    
-    This function returns immediately and runs the training in the background.
-    """
-    if client_id is None:
-        client_id = str(uuid.uuid4())
-    
-    job_id = client_id
-    
-    try:
-        # Send initial status BEFORE starting heavy work
-        await socket_manager.send_status(job_id, "initializing", "Preparing training environment...")
-        
-        logger.info(f"[{job_id}] Starting training job (async wrapper)")
-        
-        # Send status update
-        await socket_manager.send_status(job_id, "loading", "Loading model and dataset...")
-        
-        # Run the BLOCKING function in a thread pool
-        # This prevents it from blocking the async event loop
-        loop = asyncio.get_running_loop()
-        result = await asyncio.to_thread(
-            _blocking_train_logic,
-            job_id,
-            config,
-            dataset_path,
-            loop
-        )
-        
-        # Send completion
-        await socket_manager.send_completion(
-            job_id,
-            success=True,
-            model_path=result.get('model_path', '')
-        )
-        
-        logger.info(f"[{job_id}] Training job completed")
-        return job_id
-        
-    except Exception as e:
-        logger.error(f"[{job_id}] Training job failed: {e}", exc_info=True)
-        
-        # Send error to frontend
-        await socket_manager.broadcast_json(
-            job_id,
-            {
-                "type": "error",
-                "message": f"Training failed: {str(e)}",
-                "error_type": type(e).__name__
-            }
-        )
-        
-        raise
+def _get(params: dict, key: str, default: Any) -> Any:
+    """Extract value from nested {'value': x} or flat dict."""
+    v = params.get(key, {})
+    if isinstance(v, dict):
+        return v.get("value", default)
+    return v if v is not None else default

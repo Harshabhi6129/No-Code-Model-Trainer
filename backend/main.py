@@ -215,6 +215,63 @@ async def get_status(job_id: str) -> dict[str, Any]:
     return state
 
 
+class InferRequest(BaseModel):
+    run_id: str
+    text: str
+    artifact_path: str
+    label_names: list[str] = []
+
+    @field_validator("text")
+    @classmethod
+    def text_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text cannot be empty")
+        return v.strip()
+
+    @field_validator("run_id")
+    @classmethod
+    def run_id_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("run_id cannot be empty")
+        return v.strip()
+
+
+@app.post("/infer")
+async def run_inference(req: InferRequest) -> dict[str, Any]:
+    """Run classification inference on a trained model."""
+    import asyncio
+    from services.inference_cache import cache
+
+    if len(req.text) > 2000:
+        raise HTTPException(
+            400,
+            f"Text is too long ({len(req.text)} chars). Maximum 2000 characters. "
+            "Very long text is automatically truncated to 512 tokens by the model."
+        )
+
+    if not req.artifact_path:
+        raise HTTPException(422, "No trained model artifact found for this run.")
+
+    try:
+        result = await cache.predict(
+            run_id=req.run_id,
+            text=req.text,
+            artifact_path=req.artifact_path,
+            label_names=req.label_names,
+        )
+        return result
+    except FileNotFoundError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(504, str(exc)) from exc
+    except RuntimeError as exc:
+        logger.error("Inference runtime error for run %s: %s", req.run_id, exc, exc_info=True)
+        raise HTTPException(500, "Model inference failed. Please try again.") from exc
+    except Exception as exc:
+        logger.error("Inference error for run %s: %s", req.run_id, exc, exc_info=True)
+        raise HTTPException(500, "An unexpected error occurred during inference.") from exc
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}
