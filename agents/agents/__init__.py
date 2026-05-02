@@ -3,6 +3,7 @@ from .data import DataAgent
 from .model import ModelAgent
 from .train_agent import TrainAgent
 from .eval_agent import EvalAgent
+from .deploy_agent import DeployAgent
 from .pipeline import TrainingPipeline
 
 __all__ = [
@@ -11,5 +12,6 @@ __all__ = [
     "ModelAgent",
     "TrainAgent",
     "EvalAgent",
+    "DeployAgent",
     "TrainingPipeline",
 ]

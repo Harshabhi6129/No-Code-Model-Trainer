@@ -78,7 +78,7 @@ export function TrainClient() {
     if (file) handleFile(file)
   }
 
-  const TOTAL_AGENTS = 5
+  const TOTAL_AGENTS = 6
   const completedAgents = messages.filter((m) => m.success && (m.output as Record<string,unknown>)?.final !== false).map((m) => m.agent)
 
   async function handleSend() {
@@ -149,7 +149,8 @@ export function TrainClient() {
         const intentOut  = (allMessages.find(m => m.agent === "Intent")?.output ?? {}) as Record<string, unknown>
         const modelOut   = (allMessages.find(m => m.agent === "Model")?.output  ?? {}) as Record<string, unknown>
         const trainOut   = (allMessages.find(m => m.agent === "Train" && (m.output as Record<string, unknown>)?.final !== false)?.output ?? {}) as Record<string, unknown>
-        const evalOut    = (allMessages.find(m => m.agent === "Eval")?.output   ?? {}) as Record<string, unknown>
+        const evalOut    = (allMessages.find(m => m.agent === "Eval")?.output    ?? {}) as Record<string, unknown>
+        const deployOut  = (allMessages.find(m => m.agent === "Deploy")?.output  ?? {}) as Record<string, unknown>
 
         // Metrics: prefer EvalAgent output (includes Claude interpretation);
         // fall back to TrainAgent raw metrics if Eval didn't run.
@@ -160,20 +161,27 @@ export function TrainClient() {
           precision:    metricsSource.precision    ?? null,
           recall:       metricsSource.recall       ?? null,
           per_class_f1: metricsSource.per_class_f1 ?? {},
-          evaluation_grade: (evalOut as Record<string,unknown>).evaluation_grade ?? null,
-          summary:          (evalOut as Record<string,unknown>).summary          ?? null,
+          evaluation_grade: evalOut.evaluation_grade ?? null,
+          summary:          evalOut.summary          ?? null,
+          strengths:        evalOut.strengths         ?? [],
+          concerns:         evalOut.concerns          ?? [],
+          next_steps:       evalOut.next_steps        ?? [],
         }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (supabase as any).from("runs").update({
-          status:       success ? "completed" : "failed",
-          task_type:    intentOut.task_type as string ?? null,
-          model_id:     (modelOut.base_model ?? intentOut.base_model_hint) as string ?? null,
-          intent_spec:  intentOut,
-          model_recipe: modelOut,
-          metrics:      metrics,
+          status:        success ? "completed" : "failed",
+          task_type:     intentOut.task_type as string ?? null,
+          model_id:      (modelOut.base_model ?? intentOut.base_model_hint) as string ?? null,
+          intent_spec:   intentOut,
+          model_recipe:  modelOut,
+          metrics:       metrics,
           artifact_path: (trainOut.model_path as string) ?? null,
-          completed_at: new Date().toISOString(),
+          hf_model_url:  (deployOut.hf_url as string) ?? null,
+          hf_repo_id:    (deployOut.hf_repo_id as string) ?? null,
+          model_card:    (deployOut.model_card as string) ?? null,
+          deploy_status: (deployOut.status as string) ?? "not_deployed",
+          completed_at:  new Date().toISOString(),
           error_message: success ? null : (lastMsg?.message ?? null),
         }).eq("id", newRunId)
       }

@@ -22,6 +22,7 @@ class AgentContext:
     model_recipe: dict[str, Any] = field(default_factory=dict)
     training_result: dict[str, Any] = field(default_factory=dict)
     eval_result: dict[str, Any] = field(default_factory=dict)
+    deploy_result: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

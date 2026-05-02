@@ -10,6 +10,7 @@ from .data import DataAgent
 from .model import ModelAgent
 from .train_agent import TrainAgent
 from .eval_agent import EvalAgent
+from .deploy_agent import DeployAgent
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,12 @@ _AGENT_ORDER = ["intent", "data", "model", "train", "eval"]
 
 class TrainingPipeline:
     def __init__(self) -> None:
-        self.intent = IntentAgent()
-        self.data   = DataAgent()
-        self.model  = ModelAgent()
-        self.train  = TrainAgent()
-        self.eval   = EvalAgent()
+        self.intent  = IntentAgent()
+        self.data    = DataAgent()
+        self.model   = ModelAgent()
+        self.train   = TrainAgent()
+        self.eval    = EvalAgent()
+        self.deploy  = DeployAgent()
 
     async def run_streaming(
         self,
@@ -36,7 +38,7 @@ class TrainingPipeline:
             dataset_path=dataset_path,
         )
 
-        agents = [self.intent, self.data, self.model, self.train, self.eval]
+        agents = [self.intent, self.data, self.model, self.train, self.eval, self.deploy]
         last_result: AgentResult | None = None
 
         for agent in agents:
