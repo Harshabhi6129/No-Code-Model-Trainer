@@ -7,6 +7,7 @@ from typing import AsyncIterator
 from .base import AgentContext, AgentResult
 from .intent import IntentAgent
 from .data import DataAgent
+from .clean_agent import CleanAgent
 from .model import ModelAgent
 from .train_agent import TrainAgent
 from .eval_agent import EvalAgent
@@ -14,14 +15,15 @@ from .deploy_agent import DeployAgent
 
 logger = logging.getLogger(__name__)
 
-# Full 5-agent pipeline: Intent → Data → Model → Train → Eval
-_AGENT_ORDER = ["intent", "data", "model", "train", "eval"]
+# Full pipeline: Intent → Data → Clean → Model → Train → Eval → Deploy
+_AGENT_ORDER = ["intent", "data", "clean", "model", "train", "eval", "deploy"]
 
 
 class TrainingPipeline:
     def __init__(self) -> None:
         self.intent  = IntentAgent()
         self.data    = DataAgent()
+        self.clean   = CleanAgent()
         self.model   = ModelAgent()
         self.train   = TrainAgent()
         self.eval    = EvalAgent()
@@ -40,7 +42,7 @@ class TrainingPipeline:
             hyperparameter_overrides=hyperparameter_overrides or {},
         )
 
-        agents = [self.intent, self.data, self.model, self.train, self.eval, self.deploy]
+        agents = [self.intent, self.data, self.clean, self.model, self.train, self.eval, self.deploy]
         last_result: AgentResult | None = None
 
         for agent in agents:
