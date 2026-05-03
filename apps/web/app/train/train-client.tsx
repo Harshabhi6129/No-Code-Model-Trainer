@@ -174,7 +174,7 @@ const APPROACH_OPTIONS = [
 const BAR_COLORS = ["#7c6fcd","#5ea5f8","#4ade80","#f97316","#e879f9","#facc15","#38bdf8","#fb7185"]
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
-  Intent: BrainCircuit, Data: Database, Model: Cpu,
+  Intent: BrainCircuit, Data: Database, Clean: Settings2, Model: Cpu,
   Train: Cpu, Eval: BarChart3, Deploy: Rocket, System: XCircle,
 }
 
@@ -584,7 +584,7 @@ function ConfigurePanel({
 // ---------------------------------------------------------------------------
 
 function TrainingPanel({ messages, streaming }: { messages: AgentMessage[]; streaming: boolean }) {
-  const TOTAL = 6
+  const TOTAL = 7
   const completed = messages.filter(m => m.output.final !== false && m.success).map(m => m.agent)
   const progress = (completed.length / TOTAL) * 100
   const activeAgent = streaming ? messages[messages.length - 1]?.agent : null
@@ -599,7 +599,7 @@ function TrainingPanel({ messages, streaming }: { messages: AgentMessage[]; stre
           </div>
           <Progress value={progress} className="h-2" />
           <div className="flex gap-2 flex-wrap">
-            {["Intent","Data","Model","Train","Eval","Deploy"].map(name => {
+            {["Intent","Data","Clean","Model","Train","Eval","Deploy"].map(name => {
               const done   = completed.includes(name)
               const active = activeAgent === name
               return (
