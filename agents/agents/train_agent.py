@@ -54,17 +54,20 @@ class TrainAgent(BaseAgent):
         profile = context.data_profile
         recipe  = context.model_recipe
 
+        ovr = context.hyperparameter_overrides  # user overrides win over agent recipe
+
         task_type         = str(spec.get("task_type", "text_classification"))
         text_col          = str(spec.get("input_column") or profile.get("input_col") or "text")
         label_col         = str(spec.get("label_column") or profile.get("label_col") or "label")
-        model_id          = str(recipe.get("base_model", spec.get("base_model_hint", "distilbert-base-uncased")))
-        training_approach = str(recipe.get("training_approach", "full_finetune"))
-        learning_rate     = float(recipe.get("learning_rate", 2e-5))
-        num_epochs        = int(recipe.get("num_epochs", 3))
-        batch_size        = int(recipe.get("batch_size", 16))
-        max_length        = int(recipe.get("max_length", 128))
-        weight_decay      = float(recipe.get("weight_decay", 0.01))
-        warmup_ratio      = float(recipe.get("warmup_ratio", 0.1))
+        model_id          = str(ovr.get("model_id") or recipe.get("base_model") or spec.get("base_model_hint", "distilbert-base-uncased"))
+        training_approach = str(ovr.get("training_approach") or recipe.get("training_approach", "full_finetune"))
+        learning_rate     = float(ovr.get("learning_rate") or recipe.get("learning_rate", 2e-5))
+        num_epochs        = int(ovr.get("num_epochs") or recipe.get("num_epochs", 3))
+        batch_size        = int(ovr.get("batch_size") or recipe.get("batch_size", 16))
+        max_length        = int(ovr.get("max_length") or recipe.get("max_length", 128))
+        weight_decay      = float(ovr.get("weight_decay") or recipe.get("weight_decay", 0.01))
+        warmup_ratio      = float(ovr.get("warmup_ratio") or recipe.get("warmup_ratio", 0.1))
+        lora_r            = int(ovr.get("lora_r") or recipe.get("lora_r", 8))
 
         # ── Pre-flight validation ─────────────────────────────────────────────
         val = validate_training_inputs(
@@ -144,6 +147,7 @@ class TrainAgent(BaseAgent):
                 max_length=max_length,
                 weight_decay=weight_decay,
                 warmup_ratio=warmup_ratio,
+                lora_r=lora_r,
                 use_cpu=False,
             )
         )

@@ -2,6 +2,8 @@
 LRU in-memory model cache for the /infer endpoint.
 Holds up to MAX_CACHED loaded models; evicts the least-recently-used on overflow.
 All model loads and forward passes run in a thread pool via asyncio.to_thread().
+asyncio.Lock() ensures only one coroutine loads/evicts at a time — prevents
+double-loading and cache corruption under concurrent requests.
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ class _CachedModel:
 class ModelCache:
     def __init__(self) -> None:
         self._cache: dict[str, _CachedModel] = {}
+        self._lock = asyncio.Lock()
 
     async def predict(
         self,
@@ -42,13 +45,15 @@ class ModelCache:
         """
         Run classification on `text`. Loads model on first call, then reuses cache.
         Raises asyncio.TimeoutError if inference exceeds _INFER_TIMEOUT seconds.
+        Lock ensures only one load/eviction runs at a time; _infer runs outside the lock.
         """
-        entry = self._cache.get(run_id)
-        if entry is None:
-            entry = await self._load(run_id=run_id, artifact_path=artifact_path, label_names=label_names)
+        async with self._lock:
+            entry = self._cache.get(run_id)
+            if entry is None:
+                entry = await self._load(run_id=run_id, artifact_path=artifact_path, label_names=label_names)
+            entry.last_used = time.monotonic()
 
-        entry.last_used = time.monotonic()
-
+        # _infer is CPU/GPU bound — runs outside lock so other requests aren't blocked
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(self._infer, entry, text),
@@ -63,8 +68,7 @@ class ModelCache:
         return result
 
     async def _load(self, *, run_id: str, artifact_path: str, label_names: list[str]) -> _CachedModel:
-        """Load model + tokenizer from disk. Evicts LRU if cache is full."""
-        # Evict least recently used
+        """Load model + tokenizer from disk. Evicts LRU if cache is full. Caller must hold _lock."""
         if len(self._cache) >= MAX_CACHED:
             lru_id = min(self._cache, key=lambda k: self._cache[k].last_used)
             logger.info("ModelCache: evicting run %s from cache", lru_id)
@@ -106,7 +110,6 @@ class ModelCache:
         model = AutoModelForSequenceClassification.from_pretrained(model_dir)
         model.eval()
 
-        # Attach id2label from label_names if not already set
         if label_names and (
             not model.config.id2label
             or model.config.id2label == {0: "LABEL_0"}
