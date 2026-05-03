@@ -250,6 +250,14 @@ class TrainingDivergedError(RuntimeError):
 # Blocking training (runs in a thread pool)
 # ---------------------------------------------------------------------------
 
+def _has_peft() -> bool:
+    try:
+        import peft  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def _blocking_train(
     *,
     job_id: str,
@@ -264,6 +272,7 @@ def _blocking_train(
     max_length: int,
     weight_decay: float,
     warmup_ratio: float,
+    lora_r: int = 8,
     use_cpu: bool,
 ) -> TrainingResult:
     """
@@ -388,11 +397,57 @@ def _blocking_train(
 
     # ── Model ─────────────────────────────────────────────────────────────────
     logger.info("[%s] Loading model %s (%d labels)", job_id, model_id, num_labels)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_id,
-        num_labels=num_labels,
-        ignore_mismatched_sizes=True,
-    )
+
+    is_lora  = training_approach in ("lora", "qlora")
+    is_qlora = training_approach == "qlora"
+
+    load_kwargs: dict[str, Any] = {
+        "num_labels": num_labels,
+        "ignore_mismatched_sizes": True,
+    }
+
+    # QLoRA: 4-bit quantisation — only possible on CUDA with bitsandbytes
+    if is_qlora and device_str == "cuda":
+        try:
+            from transformers import BitsAndBytesConfig
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            load_kwargs["device_map"] = "auto"
+        except Exception as exc:
+            accumulated_warnings.append(
+                f"QLoRA quantisation unavailable ({exc}) — falling back to regular LoRA."
+            )
+            is_qlora = False
+
+    model = AutoModelForSequenceClassification.from_pretrained(model_id, **load_kwargs)
+
+    # LoRA / QLoRA: wrap model with PEFT adapter
+    if is_lora:
+        if _has_peft():
+            from peft import get_peft_model, LoraConfig, TaskType, prepare_model_for_kbit_training
+            if is_qlora and device_str == "cuda":
+                model = prepare_model_for_kbit_training(model)
+            lora_config = LoraConfig(
+                r=lora_r,
+                lora_alpha=lora_r * 2,
+                lora_dropout=0.1,
+                bias="none",
+                task_type=TaskType.SEQ_CLS,
+            )
+            model = get_peft_model(model, lora_config)
+            trainable, total = model.get_nb_trainable_parameters()
+            logger.info("[%s] LoRA: trainable=%.2f%% (%d/%d params)", job_id,
+                        100 * trainable / max(total, 1), trainable, total)
+        else:
+            accumulated_warnings.append(
+                "peft package not installed — falling back to full fine-tuning. "
+                "Install: pip install peft>=0.7.0"
+            )
+            is_lora = False
 
     # ── Divergence callback ───────────────────────────────────────────────────
     class DivergenceCallback(TrainerCallback):
@@ -567,8 +622,13 @@ def _blocking_train(
 
     # ── Save model + tokenizer ────────────────────────────────────────────────
     final_model_path = output_dir / "final_model"
-    trainer.save_model(str(final_model_path))
-    tokenizer.save_pretrained(str(final_model_path))
+    if is_lora:
+        # Save PEFT adapter separately; inference_cache must merge on load
+        model.save_pretrained(str(final_model_path))
+        tokenizer.save_pretrained(str(final_model_path))
+    else:
+        trainer.save_model(str(final_model_path))
+        tokenizer.save_pretrained(str(final_model_path))
 
     # Remove checkpoints to reclaim disk space
     ckpt_dir = output_dir / "checkpoints"
@@ -613,6 +673,7 @@ async def train_model_async(
     max_length: int = 128,
     weight_decay: float = 0.01,
     warmup_ratio: float = 0.1,
+    lora_r: int = 8,
     use_cpu: bool = False,
 ) -> TrainingResult:
     """Non-blocking wrapper — runs the blocking trainer in a thread pool."""
@@ -630,5 +691,6 @@ async def train_model_async(
         max_length=max_length,
         weight_decay=weight_decay,
         warmup_ratio=warmup_ratio,
+        lora_r=lora_r,
         use_cpu=use_cpu,
     )
