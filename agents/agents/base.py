@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import abc
+import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import anthropic
+
+logger = logging.getLogger(__name__)
 
 # Readable from env so model can be swapped without a code change
 MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6"
@@ -23,6 +27,7 @@ class AgentContext:
     training_result: dict[str, Any] = field(default_factory=dict)
     eval_result: dict[str, Any] = field(default_factory=dict)
     deploy_result: dict[str, Any] = field(default_factory=dict)
+    hyperparameter_overrides: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -55,8 +60,35 @@ class BaseAgent(abc.ABC):
         result = await self.run(context)
         yield result.message
 
-    async def _chat(self, system: str, messages: list[dict[str, Any]]) -> str:
-        response = await self.client.messages.create(
-            model=MODEL, max_tokens=2048, system=system, messages=messages,
-        )
-        return response.content[0].text  # type: ignore[union-attr]
+    async def _chat(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        max_tokens: int = 4096,
+    ) -> str:
+        """
+        Call Claude with automatic retry on rate-limit and connection errors.
+        max_tokens defaults to 4096; set higher for long-form outputs (model cards).
+        """
+        import anthropic as _anthropic
+
+        for attempt in range(3):
+            try:
+                response = await self.client.messages.create(
+                    model=MODEL,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                )
+                return response.content[0].text  # type: ignore[union-attr]
+            except (_anthropic.RateLimitError, _anthropic.APIConnectionError) as exc:
+                wait = 2 ** attempt
+                logger.warning(
+                    "%s: Claude API %s on attempt %d — retrying in %ds",
+                    self.name, type(exc).__name__, attempt + 1, wait,
+                )
+                await asyncio.sleep(wait)
+            except Exception:
+                raise
+
+        raise RuntimeError(f"{self.name}: Claude API unavailable after 3 retries")
