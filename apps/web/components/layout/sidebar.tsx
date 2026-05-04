@@ -2,15 +2,16 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { BrainCircuit, LayoutDashboard, Zap, ListOrdered, LogOut, Settings } from "lucide-react"
+import { BrainCircuit, LayoutDashboard, Zap, ListOrdered, LogOut, Settings, Library } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/train",     label: "New Training", icon: Zap },
+  { href: "/dashboard", label: "Dashboard",    icon: LayoutDashboard },
+  { href: "/train",     label: "Train",        icon: Zap },
+  { href: "/models",    label: "Model Catalog", icon: Library },
   { href: "/runs",      label: "All Runs",     icon: ListOrdered },
 ]
 

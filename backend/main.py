@@ -401,6 +401,44 @@ async def run_inference(req: InferRequest) -> dict[str, Any]:
         raise HTTPException(500, "An unexpected error occurred during inference.") from exc
 
 
+@app.get("/models")
+async def get_models(
+    task_type: str | None = None,
+    category: str | None = None,
+    max_params_m: int | None = None,
+    provider: str | None = None,
+    lora_only: bool = False,
+    q: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return filtered model catalog."""
+    agents_path = Path(__file__).parent.parent / "agents"
+    if str(agents_path) not in sys.path:
+        sys.path.insert(0, str(agents_path))
+
+    from agents.model_catalog import filter_catalog
+
+    results = filter_catalog(
+        task_type=task_type,
+        category=category,
+        max_params_m=max_params_m,
+        provider=provider,
+        lora_only=lora_only,
+    )
+
+    if q:
+        ql = q.lower()
+        results = [
+            m for m in results
+            if ql in m["display_name"].lower()
+            or ql in m["description"].lower()
+            or ql in m.get("best_for", "").lower()
+            or ql in m["model_id"].lower()
+            or any(ql in tag for tag in m.get("tags", []))
+        ]
+
+    return results
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}
