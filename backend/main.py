@@ -227,6 +227,7 @@ class ChatRequest(BaseModel):
     file_id: str | None = None
     run_id: str | None = None
     hyperparameter_overrides: dict[str, Any] = {}
+    hf_token: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -264,6 +265,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
                 user_intent=req.message,
                 dataset_path=dataset_path,
                 hyperparameter_overrides=req.hyperparameter_overrides,
+                hf_token=req.hf_token,
             ):
                 data = json.dumps({
                     "agent": result.agent_name,

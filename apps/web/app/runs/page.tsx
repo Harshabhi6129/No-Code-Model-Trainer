@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import Link from "next/link"
 import { formatDistanceToNow } from "date-fns"
-import { Plus, Activity, CheckCircle2, Clock, XCircle, ArrowRight } from "lucide-react"
+import { Plus, Activity, CheckCircle2, Clock, XCircle, ArrowRight, GitCompare } from "lucide-react"
 import type { Run } from "@/lib/supabase/types"
 
 const statusConfig: Record<string, { icon: React.ElementType; color: string; badge: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -70,9 +70,14 @@ export default async function RunsPage() {
             <h1 className="text-2xl font-bold">All Runs</h1>
             <p className="text-muted-foreground text-sm mt-1">{allRuns.length} training run{allRuns.length !== 1 ? "s" : ""}</p>
           </div>
-          <Button asChild>
-            <Link href="/train"><Plus className="h-4 w-4 mr-2" />New Run</Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" asChild>
+              <Link href="/runs/compare"><GitCompare className="h-4 w-4 mr-2" />Compare</Link>
+            </Button>
+            <Button asChild>
+              <Link href="/train"><Plus className="h-4 w-4 mr-2" />New Run</Link>
+            </Button>
+          </div>
         </div>
 
         <Card>

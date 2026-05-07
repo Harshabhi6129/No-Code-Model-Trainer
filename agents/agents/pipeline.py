@@ -34,12 +34,14 @@ class TrainingPipeline:
         user_intent: str,
         dataset_path: str | None = None,
         hyperparameter_overrides: dict | None = None,
+        hf_token: str | None = None,
     ) -> AsyncIterator[AgentResult]:
         context = AgentContext(
             run_id=str(uuid.uuid4()),
             user_intent=user_intent,
             dataset_path=dataset_path,
             hyperparameter_overrides=hyperparameter_overrides or {},
+            hf_token=hf_token,
         )
 
         agents = [self.intent, self.data, self.clean, self.model, self.train, self.eval, self.deploy]

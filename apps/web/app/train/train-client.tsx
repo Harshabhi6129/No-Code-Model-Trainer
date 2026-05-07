@@ -1165,6 +1165,22 @@ export function TrainClient() {
         dispatch({ type: "SELECT", id: session.id })
       }
     } catch { /* ignore */ }
+
+    // Check if user arrived from Dataset Library with a pre-selected dataset
+    try {
+      const raw = localStorage.getItem("modelforge_preselect_dataset")
+      if (raw) {
+        const uploadResult = JSON.parse(raw) as UploadResult
+        localStorage.removeItem("modelforge_preselect_dataset")
+        const label = uploadResult.filename
+          .replace(/\.(csv|json|jsonl)$/i, "")
+          .replace(/[_-]/g, " ")
+          .slice(0, 28)
+        const session = makeSession({ uploadResult, setupSubstep: "analyzing", label })
+        dispatch({ type: "ADD", session })
+        dispatch({ type: "SELECT", id: session.id })
+      }
+    } catch { /* ignore */ }
   }, [])
 
   // Persist sessions to localStorage on every change
@@ -1231,6 +1247,8 @@ export function TrainClient() {
       warmup_ratio:      session.hyperParams.warmup_ratio,
     }
 
+    const hfToken = localStorage.getItem("modelforge_hf_token") || null
+
     try {
       const res = await fetch(`${API_URL}/chat`, {
         method:  "POST",
@@ -1240,6 +1258,7 @@ export function TrainClient() {
           file_id:                  session.uploadResult.file_id,
           run_id:                   newRunId,
           hyperparameter_overrides: overrides,
+          hf_token:                 hfToken,
         }),
       })
       if (!res.ok) throw new Error(await res.text())
