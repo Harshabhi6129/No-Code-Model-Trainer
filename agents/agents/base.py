@@ -28,6 +28,7 @@ class AgentContext:
     eval_result: dict[str, Any] = field(default_factory=dict)
     deploy_result: dict[str, Any] = field(default_factory=dict)
     hyperparameter_overrides: dict[str, Any] = field(default_factory=dict)
+    hf_token: str | None = None
 
 
 @dataclass

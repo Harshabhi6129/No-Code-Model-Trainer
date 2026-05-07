@@ -361,7 +361,12 @@ class DeployAgent(BaseAgent):
             )
 
         # ── 5. HF Token not set ──────────────────────────────────────────────
-        hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        hf_token = (
+            context.hf_token
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGINGFACE_TOKEN")
+            or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        )
         if not hf_token:
             slug = _slugify(user_intent or spec.get("task_type", "model") or "model")
             context.deploy_result = {"status": "skipped", "reason": "no_hf_token", "suggested_repo_slug": slug}
