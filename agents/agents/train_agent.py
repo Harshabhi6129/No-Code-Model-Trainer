@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import AsyncIterator, Any
 
@@ -131,6 +132,9 @@ class TrainAgent(BaseAgent):
 
         # ── Launch training as a background task ──────────────────────────────
         start_time = time.monotonic()
+        progress_log: list[dict] = []
+        progress_lock = threading.Lock()
+        _emitted_steps: set[int] = set()  # track which steps we've already streamed
 
         training_task = asyncio.create_task(
             train_model_async(
@@ -149,6 +153,8 @@ class TrainAgent(BaseAgent):
                 warmup_ratio=warmup_ratio,
                 lora_r=lora_r,
                 use_cpu=False,
+                progress_log=progress_log,
+                progress_lock=progress_lock,
             )
         )
 
@@ -168,13 +174,37 @@ class TrainAgent(BaseAgent):
                         next_agent=None,
                     )
                     return
-                yield AgentResult(
-                    agent_name=self.name,
-                    success=True,
-                    output={"status": "training", "elapsed_seconds": elapsed, "final": False},
-                    message=f"Training in progress — {elapsed}s elapsed...",
-                    next_agent="Eval",
-                )
+
+                # Drain any new epoch entries from the progress log
+                with progress_lock:
+                    snapshot = list(progress_log)
+                new_entries = [e for e in snapshot if e["step"] not in _emitted_steps]
+                for entry in new_entries:
+                    _emitted_steps.add(entry["step"])
+                    yield AgentResult(
+                        agent_name=self.name,
+                        success=True,
+                        output={
+                            "status": "epoch",
+                            "epoch": entry["epoch"],
+                            "step": entry["step"],
+                            "loss": entry["loss"],
+                            "eval_loss": entry["eval_loss"],
+                            "learning_rate": entry["learning_rate"],
+                            "final": False,
+                        },
+                        message=f"Epoch {entry['epoch'] + 1} — loss={entry['loss']}",
+                        next_agent="Eval",
+                    )
+
+                if not new_entries:
+                    yield AgentResult(
+                        agent_name=self.name,
+                        success=True,
+                        output={"status": "training", "elapsed_seconds": elapsed, "final": False},
+                        message=f"Training in progress — {elapsed}s elapsed...",
+                        next_agent="Eval",
+                    )
             except asyncio.CancelledError:
                 break
 
@@ -236,6 +266,7 @@ class TrainAgent(BaseAgent):
             "training_time_seconds": result.training_time_seconds,
             "device":               result.device,
             "warnings":             result.warnings + val.warnings,
+            "epoch_metrics":        result.epoch_metrics,
             **result.metrics,
         }
 

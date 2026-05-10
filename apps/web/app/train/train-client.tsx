@@ -21,6 +21,7 @@ import {
 } from "recharts"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
+import { LossCurve, type EpochPoint } from "./loss-curve"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const LS_KEY = "modelforge_sessions_v2"
@@ -88,6 +89,7 @@ interface TrainingSession {
   f1: number | null
   artifactPath: string | null
   errorMessage: string | null
+  epochMetrics: EpochPoint[]
 }
 
 type Action =
@@ -182,6 +184,7 @@ function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession 
     f1: null,
     artifactPath: null,
     errorMessage: null,
+    epochMetrics: [],
     ...overrides,
   }
 }
@@ -781,10 +784,11 @@ function SetupSummary({ session }: { session: TrainingSession }) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function TrainingColumn({
-  session, messages, streaming,
+  session, messages, epochMetrics, streaming,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
+  epochMetrics: EpochPoint[]
   streaming: boolean
 }) {
   const completed = messages.filter(m => m.output.final !== false && m.success).map(m => m.agent)
@@ -846,6 +850,13 @@ function TrainingColumn({
                 })}
               </div>
             </div>
+
+            {/* Loss curve (shown as soon as first epoch arrives) */}
+            {epochMetrics.length > 0 && (
+              <div className="rounded-xl border border-border bg-secondary/30 p-3">
+                <LossCurve data={epochMetrics} isLive={streaming} />
+              </div>
+            )}
 
             {/* Agent messages */}
             <div className="space-y-2">
@@ -1050,10 +1061,11 @@ function SessionLabelEditor({
 // ──────────────────────────────────────────────────────────────────────────────
 
 function SessionWorkspace({
-  session, messages, streaming, onUpdate, onStartTraining,
+  session, messages, epochMetrics, streaming, onUpdate, onStartTraining,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
+  epochMetrics: EpochPoint[]
   streaming: boolean
   onUpdate: (patch: Partial<TrainingSession>) => void
   onStartTraining: () => void
@@ -1084,7 +1096,7 @@ function SessionWorkspace({
           />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
-          <TrainingColumn session={session} messages={messages} streaming={streaming} />
+          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
           <ResultsColumn session={session} />
@@ -1125,9 +1137,10 @@ function EmptyWorkspace({ onAdd }: { onAdd: () => void }) {
 export function TrainClient() {
   const supabase = createClient()
   const [state, dispatch] = useReducer(reducer, { sessions: [], activeId: null })
-  // Messages stored outside reducer: not serialized to localStorage
-  const [liveMessages, setLiveMessages] = useState<Record<string, AgentMessage[]>>({})
-  const [streamingId,  setStreamingId]  = useState<string | null>(null)
+  // Messages and epoch metrics stored outside reducer: not serialized to localStorage
+  const [liveMessages,      setLiveMessages]      = useState<Record<string, AgentMessage[]>>({})
+  const [liveEpochMetrics,  setLiveEpochMetrics]  = useState<Record<string, EpochPoint[]>>({})
+  const [streamingId,       setStreamingId]       = useState<string | null>(null)
   const hydratedRef = useRef(false)
 
   // Hydrate from localStorage once on mount
@@ -1211,7 +1224,8 @@ export function TrainClient() {
 
     setStreamingId(sessionId)
     setLiveMessages(prev => ({ ...prev, [sessionId]: [] }))
-    updateSession(sessionId, { status: "training", errorMessage: null })
+    setLiveEpochMetrics(prev => ({ ...prev, [sessionId]: [] }))
+    updateSession(sessionId, { status: "training", errorMessage: null, epochMetrics: [] })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: { user } } = await (supabase as any).auth.getUser()
@@ -1267,6 +1281,7 @@ export function TrainClient() {
       const decoder = new TextDecoder()
       let buf = ""
       const allMessages: AgentMessage[] = []
+      const epochPoints: EpochPoint[] = []
 
       while (true) {
         const { done, value } = await reader.read()
@@ -1280,6 +1295,19 @@ export function TrainClient() {
           if (payload === "[DONE]") break
           try {
             const msg: AgentMessage = JSON.parse(payload)
+            // Epoch progress events are streamed separately — not added to the message list
+            if (msg.agent === "Train" && msg.output.status === "epoch") {
+              const pt: EpochPoint = {
+                epoch:         msg.output.epoch as number,
+                step:          msg.output.step  as number,
+                loss:          msg.output.loss  as number | null,
+                eval_loss:     msg.output.eval_loss as number | null,
+                learning_rate: msg.output.learning_rate as number | null,
+              }
+              epochPoints.push(pt)
+              setLiveEpochMetrics(prev => ({ ...prev, [sessionId]: [...epochPoints] }))
+              continue
+            }
             const lastIdx = allMessages.findLastIndex(m => m.agent === msg.agent)
             const lastWasKeepalive = lastIdx >= 0 && allMessages[lastIdx].output.final === false
             if (lastWasKeepalive) {
@@ -1338,6 +1366,7 @@ export function TrainClient() {
         f1:          typeof mSrc.f1       === "number" ? mSrc.f1       : null,
         artifactPath: trainOut.model_path as string ?? null,
         errorMessage: pipelineSuccess ? null : (allMessages.find(m => !m.success)?.message ?? null),
+        epochMetrics: epochPoints,
       })
 
       if (!pipelineSuccess) toast.error("Pipeline encountered an error — see training column")
@@ -1362,8 +1391,11 @@ export function TrainClient() {
     }
   }
 
-  const activeSession = state.sessions.find(s => s.id === state.activeId) ?? null
-  const activeMsgs    = activeSession ? (liveMessages[activeSession.id] ?? []) : []
+  const activeSession      = state.sessions.find(s => s.id === state.activeId) ?? null
+  const activeMsgs         = activeSession ? (liveMessages[activeSession.id] ?? []) : []
+  const activeEpochMetrics = activeSession
+    ? (liveEpochMetrics[activeSession.id] ?? activeSession.epochMetrics)
+    : []
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -1378,6 +1410,7 @@ export function TrainClient() {
           <SessionWorkspace
             session={activeSession}
             messages={activeMsgs}
+            epochMetrics={activeEpochMetrics}
             streaming={streamingId === activeSession.id}
             onUpdate={patch => updateSession(activeSession.id, patch)}
             onStartTraining={() => startTraining(activeSession.id)}
