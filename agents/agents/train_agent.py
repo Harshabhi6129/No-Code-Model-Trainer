@@ -20,12 +20,16 @@ from .ml_core import (
     validate_training_inputs,
     train_model_async,
     TrainingDivergedError,
+    TrainingCancelledError,
 )
 
 logger = logging.getLogger(__name__)
 
 _KEEPALIVE_INTERVAL = 20   # seconds between keepalive SSE events
 _TRAINING_TIMEOUT   = 3600 # hard cap: 60 minutes
+
+# Registry: run_id → (asyncio.Task, cancel_event) — allows external cancellation
+_active_runs: dict[str, tuple["asyncio.Task[Any]", threading.Event]] = {}
 
 
 class TrainAgent(BaseAgent):
@@ -134,6 +138,7 @@ class TrainAgent(BaseAgent):
         start_time = time.monotonic()
         progress_log: list[dict] = []
         progress_lock = threading.Lock()
+        cancel_event = threading.Event()
         _emitted_steps: set[int] = set()  # track which steps we've already streamed
 
         training_task = asyncio.create_task(
@@ -155,8 +160,11 @@ class TrainAgent(BaseAgent):
                 use_cpu=False,
                 progress_log=progress_log,
                 progress_lock=progress_lock,
+                cancel_event=cancel_event,
             )
         )
+        if context.run_id:
+            _active_runs[context.run_id] = (training_task, cancel_event)
 
         # ── Keepalive loop ────────────────────────────────────────────────────
         while not training_task.done():
@@ -209,8 +217,19 @@ class TrainAgent(BaseAgent):
                 break
 
         # ── Resolve result ────────────────────────────────────────────────────
+        _active_runs.pop(context.run_id, None)
+
         try:
             result = training_task.result()
+        except TrainingCancelledError:
+            yield AgentResult(
+                agent_name=self.name,
+                success=False,
+                output={"status": "cancelled", "final": True},
+                message="Training was cancelled.",
+                next_agent=None,
+            )
+            return
         except TrainingDivergedError as exc:
             yield AgentResult(
                 agent_name=self.name,
@@ -295,3 +314,17 @@ class TrainAgent(BaseAgent):
             ),
             next_agent="Eval",
         )
+
+
+def cancel_run(run_id: str) -> bool:
+    """
+    Signal the active training run to stop at the next step boundary.
+    Returns True if a run was found and signalled; False if run_id is unknown.
+    """
+    entry = _active_runs.get(run_id)
+    if entry is None:
+        return False
+    _task, event = entry
+    event.set()
+    logger.info("[%s] Cancel signalled", run_id)
+    return True

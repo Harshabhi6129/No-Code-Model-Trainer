@@ -308,6 +308,21 @@ async def start_training_job_deprecated() -> None:
     )
 
 
+@app.post("/train/{run_id}/cancel")
+async def cancel_training(run_id: str) -> dict[str, str]:
+    """Signal an active training run to stop at the next step boundary."""
+    agents_path = Path(__file__).parent.parent / "agents"
+    if str(agents_path) not in sys.path:
+        sys.path.insert(0, str(agents_path))
+
+    from agents.train_agent import cancel_run
+
+    found = cancel_run(run_id)
+    if not found:
+        raise HTTPException(404, f"No active training run found for run_id={run_id}")
+    return {"status": "cancelling", "run_id": run_id}
+
+
 @app.get("/status/{job_id}")
 async def get_status(job_id: str) -> dict[str, Any]:
     """Get the last known status for a WebSocket training job."""

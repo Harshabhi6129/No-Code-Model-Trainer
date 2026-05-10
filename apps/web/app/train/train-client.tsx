@@ -784,12 +784,13 @@ function SetupSummary({ session }: { session: TrainingSession }) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function TrainingColumn({
-  session, messages, epochMetrics, streaming,
+  session, messages, epochMetrics, streaming, onCancel,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
   epochMetrics: EpochPoint[]
   streaming: boolean
+  onCancel?: () => void
 }) {
   const completed = messages.filter(m => m.output.final !== false && m.success).map(m => m.agent)
   const progress  = (completed.length / AGENT_ORDER.length) * 100
@@ -805,10 +806,20 @@ function TrainingColumn({
           <Cpu className="h-4 w-4 text-primary" />
           <span className="text-sm font-semibold">Training</span>
           {streaming && (
-            <span className="ml-auto text-[10px] text-primary animate-pulse flex items-center gap-1">
-              <div className="h-1.5 w-1.5 rounded-full bg-primary animate-ping" />
-              Live
-            </span>
+            <>
+              <span className="ml-auto text-[10px] text-primary animate-pulse flex items-center gap-1">
+                <div className="h-1.5 w-1.5 rounded-full bg-primary animate-ping" />
+                Live
+              </span>
+              {onCancel && (
+                <button
+                  onClick={onCancel}
+                  className="ml-2 text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
+                >
+                  Cancel
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1061,7 +1072,7 @@ function SessionLabelEditor({
 // ──────────────────────────────────────────────────────────────────────────────
 
 function SessionWorkspace({
-  session, messages, epochMetrics, streaming, onUpdate, onStartTraining,
+  session, messages, epochMetrics, streaming, onUpdate, onStartTraining, onCancel,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
@@ -1069,6 +1080,7 @@ function SessionWorkspace({
   streaming: boolean
   onUpdate: (patch: Partial<TrainingSession>) => void
   onStartTraining: () => void
+  onCancel: () => void
 }) {
   return (
     <div className="flex flex-col h-full">
@@ -1096,7 +1108,7 @@ function SessionWorkspace({
           />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
-          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} />
+          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} onCancel={onCancel} />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
           <ResultsColumn session={session} />
@@ -1211,6 +1223,17 @@ export function TrainClient() {
 
   function updateSession(id: string, patch: Partial<TrainingSession>) {
     dispatch({ type: "UPDATE", id, patch })
+  }
+
+  async function cancelTraining(sessionId: string) {
+    const session = state.sessions.find(s => s.id === sessionId)
+    if (!session?.runId) return
+    try {
+      await fetch(`${API_URL}/train/${session.runId}/cancel`, { method: "POST" })
+      toast.info("Cancellation requested — stopping at next step boundary…")
+    } catch {
+      toast.error("Could not reach the server to cancel.")
+    }
   }
 
   async function startTraining(sessionId: string) {
@@ -1414,6 +1437,7 @@ export function TrainClient() {
             streaming={streamingId === activeSession.id}
             onUpdate={patch => updateSession(activeSession.id, patch)}
             onStartTraining={() => startTraining(activeSession.id)}
+            onCancel={() => cancelTraining(activeSession.id)}
           />
         ) : (
           <EmptyWorkspace onAdd={addSession} />
