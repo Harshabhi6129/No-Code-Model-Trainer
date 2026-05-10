@@ -248,6 +248,10 @@ class TrainingDivergedError(RuntimeError):
     """Loss became NaN or Inf — training cannot continue."""
 
 
+class TrainingCancelledError(RuntimeError):
+    """Training was cancelled by the user."""
+
+
 def _deduplicate_epoch_metrics(raw: list[dict]) -> list[dict]:
     """
     Collapse a raw per-log-step list into one entry per integer epoch.
@@ -302,6 +306,7 @@ def _blocking_train(
     use_cpu: bool,
     progress_log: list | None = None,
     progress_lock: "threading.Lock | None" = None,
+    cancel_event: "threading.Event | None" = None,
 ) -> TrainingResult:
     """
     Full HuggingFace training + evaluation pipeline.
@@ -540,6 +545,19 @@ def _blocking_train(
             with progress_lock:
                 progress_log.append(entry)
 
+    # ── Cancel callback (cooperative stop via threading.Event) ────────────────
+    class CancelCallback(TrainerCallback):
+        """Stops training at the next step boundary when cancel_event is set."""
+        def on_step_end(
+            self,
+            args: TrainingArguments,
+            state: TrainerState,
+            control: TrainerControl,
+            **kw: Any,
+        ) -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                control.should_training_stop = True
+
     # ── Mixed precision & device flags ────────────────────────────────────────
     use_fp16 = False
     use_bf16 = False
@@ -580,7 +598,8 @@ def _blocking_train(
         disable_tqdm=True,
     )
 
-    epoch_cbs = [EpochProgressCallback()] if (progress_log is not None and progress_lock is not None) else []
+    epoch_cbs  = [EpochProgressCallback()] if (progress_log is not None and progress_lock is not None) else []
+    cancel_cbs = [CancelCallback()] if cancel_event is not None else []
 
     trainer = Trainer(
         model=model,
@@ -593,6 +612,7 @@ def _blocking_train(
             DivergenceCallback(),
             EarlyStoppingCallback(early_stopping_patience=2),
             *epoch_cbs,
+            *cancel_cbs,
         ],
     )
 
@@ -603,8 +623,10 @@ def _blocking_train(
     )
     try:
         train_output = trainer.train()
+        if cancel_event is not None and cancel_event.is_set():
+            raise TrainingCancelledError("Training was cancelled by the user.")
         final_loss: float | None = round(float(train_output.training_loss), 4)
-    except TrainingDivergedError:
+    except (TrainingDivergedError, TrainingCancelledError):
         raise
     except RuntimeError as exc:
         msg = str(exc).lower()
@@ -648,9 +670,11 @@ def _blocking_train(
                 eval_dataset=test_ds,
                 tokenizer=tokenizer,
                 data_collator=collator,
-                callbacks=[DivergenceCallback(), *epoch_cbs],
+                callbacks=[DivergenceCallback(), *epoch_cbs, *cancel_cbs],
             )
             train_output = trainer_retry.train()
+            if cancel_event is not None and cancel_event.is_set():
+                raise TrainingCancelledError("Training was cancelled by the user.")
             trainer = trainer_retry
             final_loss = round(float(train_output.training_loss), 4)
         else:
@@ -753,6 +777,7 @@ async def train_model_async(
     use_cpu: bool = False,
     progress_log: list | None = None,
     progress_lock: "threading.Lock | None" = None,
+    cancel_event: "threading.Event | None" = None,
 ) -> TrainingResult:
     """Non-blocking wrapper — runs the blocking trainer in a thread pool."""
     return await asyncio.to_thread(
@@ -773,4 +798,5 @@ async def train_model_async(
         use_cpu=use_cpu,
         progress_log=progress_log,
         progress_lock=progress_lock,
+        cancel_event=cancel_event,
     )
