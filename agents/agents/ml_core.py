@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -240,10 +241,35 @@ class TrainingResult:
     device: str
     metrics: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    epoch_metrics: list[dict] = field(default_factory=list)
 
 
 class TrainingDivergedError(RuntimeError):
     """Loss became NaN or Inf — training cannot continue."""
+
+
+def _deduplicate_epoch_metrics(raw: list[dict]) -> list[dict]:
+    """
+    Collapse a raw per-log-step list into one entry per integer epoch.
+    When multiple entries share an epoch, values are merged: the latest
+    non-None value for each key wins. This ensures both train_loss (logged
+    mid-epoch) and eval_loss (logged at epoch end) appear in the same entry.
+    """
+    epoch_map: dict[int, dict] = {}
+    for entry in raw:
+        epoch = entry["epoch"]
+        if epoch not in epoch_map:
+            epoch_map[epoch] = dict(entry)
+        else:
+            existing = epoch_map[epoch]
+            epoch_map[epoch] = {
+                "epoch": epoch,
+                "step":  entry["step"],
+                "loss":          entry["loss"]          if entry["loss"]          is not None else existing["loss"],
+                "eval_loss":     entry["eval_loss"]     if entry["eval_loss"]     is not None else existing["eval_loss"],
+                "learning_rate": entry["learning_rate"] if entry["learning_rate"] is not None else existing["learning_rate"],
+            }
+    return list(epoch_map.values())
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +300,8 @@ def _blocking_train(
     warmup_ratio: float,
     lora_r: int = 8,
     use_cpu: bool,
+    progress_log: list | None = None,
+    progress_lock: "threading.Lock | None" = None,
 ) -> TrainingResult:
     """
     Full HuggingFace training + evaluation pipeline.
@@ -473,6 +501,45 @@ def _blocking_train(
                     f"Very high loss ({loss:.1f}) at step {state.global_step} — training may be unstable."
                 )
 
+    # ── Epoch progress callback (real-time loss streaming) ────────────────────
+    class EpochProgressCallback(TrainerCallback):
+        """
+        Captures per-log-step metrics into a shared thread-safe list so the
+        async keepalive loop can stream them to the SSE client in real-time.
+        Only attached when progress_log/progress_lock are provided.
+        """
+        def on_log(
+            self,
+            args: TrainingArguments,
+            state: TrainerState,
+            control: TrainerControl,
+            logs: dict | None = None,
+            **kw: Any,
+        ) -> None:
+            if not logs or progress_log is None or progress_lock is None:
+                return
+            raw_loss      = logs.get("loss")
+            raw_eval_loss = logs.get("eval_loss")
+            raw_lr        = logs.get("learning_rate")
+            # Skip steps that carry neither loss value (e.g. pure eval_accuracy lines)
+            if raw_loss is None and raw_eval_loss is None:
+                return
+
+            def _safe(v: float | None) -> float | None:
+                if v is None:
+                    return None
+                return None if (math.isnan(v) or math.isinf(v)) else round(v, 6)
+
+            entry = {
+                "epoch":         int(math.floor(state.epoch or 0)),
+                "step":          state.global_step,
+                "loss":          _safe(raw_loss),
+                "eval_loss":     _safe(raw_eval_loss),
+                "learning_rate": _safe(raw_lr),
+            }
+            with progress_lock:
+                progress_log.append(entry)
+
     # ── Mixed precision & device flags ────────────────────────────────────────
     use_fp16 = False
     use_bf16 = False
@@ -513,6 +580,8 @@ def _blocking_train(
         disable_tqdm=True,
     )
 
+    epoch_cbs = [EpochProgressCallback()] if (progress_log is not None and progress_lock is not None) else []
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -523,6 +592,7 @@ def _blocking_train(
         callbacks=[
             DivergenceCallback(),
             EarlyStoppingCallback(early_stopping_patience=2),
+            *epoch_cbs,
         ],
     )
 
@@ -578,7 +648,7 @@ def _blocking_train(
                 eval_dataset=test_ds,
                 tokenizer=tokenizer,
                 data_collator=collator,
-                callbacks=[DivergenceCallback()],
+                callbacks=[DivergenceCallback(), *epoch_cbs],
             )
             train_output = trainer_retry.train()
             trainer = trainer_retry
@@ -641,6 +711,11 @@ def _blocking_train(
         job_id, elapsed, acc, f1, final_model_path,
     )
 
+    final_epoch_metrics: list[dict] = []
+    if progress_log is not None and progress_lock is not None:
+        with progress_lock:
+            final_epoch_metrics = _deduplicate_epoch_metrics(list(progress_log))
+
     return TrainingResult(
         model_path=str(final_model_path),
         base_model=model_id,
@@ -651,6 +726,7 @@ def _blocking_train(
         device=device_str,
         metrics=metrics,
         warnings=accumulated_warnings,
+        epoch_metrics=final_epoch_metrics,
     )
 
 
@@ -675,6 +751,8 @@ async def train_model_async(
     warmup_ratio: float = 0.1,
     lora_r: int = 8,
     use_cpu: bool = False,
+    progress_log: list | None = None,
+    progress_lock: "threading.Lock | None" = None,
 ) -> TrainingResult:
     """Non-blocking wrapper — runs the blocking trainer in a thread pool."""
     return await asyncio.to_thread(
@@ -693,4 +771,6 @@ async def train_model_async(
         warmup_ratio=warmup_ratio,
         lora_r=lora_r,
         use_cpu=use_cpu,
+        progress_log=progress_log,
+        progress_lock=progress_lock,
     )
