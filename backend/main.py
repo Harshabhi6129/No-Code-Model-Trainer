@@ -9,9 +9,11 @@ from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi.background import BackgroundTask
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
+from typing import Literal
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -206,6 +208,66 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     }
 
 
+def _validate_file_id(file_id: str) -> str:
+    """Security: ensure file_id is a valid UUID before touching the filesystem."""
+    try:
+        uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid file_id format.")
+    return file_id
+
+
+class RenameDatasetRequest(BaseModel):
+    filename: str
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("filename cannot be empty")
+        if "/" in v or "\\" in v or ".." in v:
+            raise ValueError("filename contains invalid characters")
+        return v
+
+
+@app.delete("/datasets/{file_id}")
+async def delete_dataset(file_id: str) -> dict[str, str]:
+    """Remove an uploaded dataset and its registry entry."""
+    _validate_file_id(file_id)
+
+    if file_id not in _FILE_REGISTRY:
+        raise HTTPException(404, f"Dataset {file_id} not found.")
+
+    data_path = _FILE_REGISTRY.pop(file_id)
+    data_path.unlink(missing_ok=True)
+
+    meta_file = UPLOADS_DIR / f"{file_id}.meta.json"
+    meta_file.unlink(missing_ok=True)
+
+    return {"status": "deleted", "file_id": file_id}
+
+
+@app.patch("/datasets/{file_id}")
+async def rename_dataset(file_id: str, req: RenameDatasetRequest) -> dict[str, str]:
+    """Rename a dataset (updates the stored display name, not the physical file)."""
+    _validate_file_id(file_id)
+
+    if file_id not in _FILE_REGISTRY:
+        raise HTTPException(404, f"Dataset {file_id} not found.")
+
+    meta_file = UPLOADS_DIR / f"{file_id}.meta.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text())
+            meta["original_name"] = req.filename
+            meta_file.write_text(json.dumps(meta))
+        except Exception as exc:
+            logger.warning("Could not update meta for %s: %s", file_id, exc)
+
+    return {"status": "renamed", "file_id": file_id, "filename": req.filename}
+
+
 def _compute_histogram(values: list, bins: int = 10) -> tuple[list[int], list[float]]:
     """Pure-Python histogram computation (avoids numpy import at module level)."""
     if not values:
@@ -251,9 +313,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     """Stream agent responses as Server-Sent Events."""
     dataset_path = _resolve_file_id(req.file_id)
 
-    agents_path = Path(__file__).parent.parent / "agents"
-    if str(agents_path) not in sys.path:
-        sys.path.insert(0, str(agents_path))
+    _agents_import()
 
     async def event_stream():
         try:
@@ -308,19 +368,50 @@ async def start_training_job_deprecated() -> None:
     )
 
 
-@app.post("/train/{run_id}/cancel")
-async def cancel_training(run_id: str) -> dict[str, str]:
-    """Signal an active training run to stop at the next step boundary."""
+def _agents_import():
     agents_path = Path(__file__).parent.parent / "agents"
     if str(agents_path) not in sys.path:
         sys.path.insert(0, str(agents_path))
 
+
+@app.post("/train/{run_id}/cancel")
+async def cancel_training(run_id: str) -> dict[str, str]:
+    """Signal an active training run to stop at the next step boundary."""
+    _agents_import()
     from agents.train_agent import cancel_run
 
     found = cancel_run(run_id)
     if not found:
         raise HTTPException(404, f"No active training run found for run_id={run_id}")
     return {"status": "cancelling", "run_id": run_id}
+
+
+@app.post("/train/{run_id}/pause")
+async def pause_training(run_id: str) -> dict[str, str]:
+    """Block training at the next step boundary."""
+    _agents_import()
+    from agents.train_agent import pause_run, is_paused
+
+    if is_paused(run_id):
+        raise HTTPException(409, "Training is already paused.")
+    found = pause_run(run_id)
+    if not found:
+        raise HTTPException(404, f"No active training run found for run_id={run_id}")
+    return {"status": "paused", "run_id": run_id}
+
+
+@app.post("/train/{run_id}/resume")
+async def resume_training(run_id: str) -> dict[str, str]:
+    """Unblock a paused training run."""
+    _agents_import()
+    from agents.train_agent import resume_run, is_paused
+
+    if not is_paused(run_id):
+        raise HTTPException(409, "Training is not paused.")
+    found = resume_run(run_id)
+    if not found:
+        raise HTTPException(404, f"No active training run found for run_id={run_id}")
+    return {"status": "resumed", "run_id": run_id}
 
 
 @app.get("/status/{job_id}")
@@ -418,6 +509,63 @@ async def run_inference(req: InferRequest) -> dict[str, Any]:
         raise HTTPException(500, "An unexpected error occurred during inference.") from exc
 
 
+class ExportRequest(BaseModel):
+    run_id: str
+    artifact_path: str
+    format: Literal["onnx", "torchscript"] = "onnx"
+    opset_version: int = 14
+    optimize: bool = True
+
+    @field_validator("run_id", "artifact_path")
+    @classmethod
+    def not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("field cannot be empty")
+        return v.strip()
+
+
+@app.post("/export")
+async def export_model_endpoint(req: ExportRequest) -> FileResponse:
+    """Convert a trained model to ONNX or TorchScript and return as a download."""
+    import asyncio
+    import shutil
+
+    validated_path = _validate_artifact_path(req.artifact_path, req.run_id)
+
+    from services.model_exporter import export_model
+
+    try:
+        out_file: Path = await asyncio.to_thread(
+            export_model,
+            artifact_path=str(validated_path),
+            export_format=req.format,
+            opset_version=req.opset_version,
+            optimize=req.optimize,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except RuntimeError as exc:
+        logger.error("Export failed for run %s: %s", req.run_id, exc, exc_info=True)
+        raise HTTPException(500, f"Export failed: {exc}") from exc
+    except Exception as exc:
+        logger.error("Unexpected export error for run %s: %s", req.run_id, exc, exc_info=True)
+        raise HTTPException(500, "An unexpected error occurred during export.") from exc
+
+    suffix   = ".onnx" if req.format == "onnx" else ".pt"
+    filename = f"model_{req.run_id[:8]}{suffix}"
+    tmp_parent = out_file.parent
+
+    def cleanup() -> None:
+        shutil.rmtree(tmp_parent, ignore_errors=True)
+
+    return FileResponse(
+        path=str(out_file),
+        media_type="application/octet-stream",
+        filename=filename,
+        background=BackgroundTask(cleanup),
+    )
+
+
 @app.get("/models")
 async def get_models(
     task_type: str | None = None,
@@ -428,10 +576,7 @@ async def get_models(
     q: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return filtered model catalog."""
-    agents_path = Path(__file__).parent.parent / "agents"
-    if str(agents_path) not in sys.path:
-        sys.path.insert(0, str(agents_path))
-
+    _agents_import()
     from agents.model_catalog import filter_catalog
 
     results = filter_catalog(

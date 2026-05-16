@@ -2,7 +2,7 @@ from .intent import IntentAgent
 from .data import DataAgent
 from .clean_agent import CleanAgent
 from .model import ModelAgent
-from .train_agent import TrainAgent, cancel_run
+from .train_agent import TrainAgent, cancel_run, pause_run, resume_run, is_paused
 from .eval_agent import EvalAgent
 from .deploy_agent import DeployAgent
 from .pipeline import TrainingPipeline
@@ -17,4 +17,7 @@ __all__ = [
     "DeployAgent",
     "TrainingPipeline",
     "cancel_run",
+    "pause_run",
+    "resume_run",
+    "is_paused",
 ]

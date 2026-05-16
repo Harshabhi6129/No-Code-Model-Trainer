@@ -73,6 +73,19 @@ interface HyperParams {
 type SetupSubstep = "upload" | "analyzing" | "configure"
 type SessionStatus = "setup" | "training" | "completed" | "failed"
 
+interface RetrainPrefill {
+  intent: string
+  selectedModelId: string
+  hyperParams: HyperParams
+  datasetFilename: string | null
+  datasetRows: number | null
+  textColumns: string[]
+  labelColumns: string[]
+  uniqueLabels: string[]
+  label: string
+  sourceRunId: string
+}
+
 interface TrainingSession {
   id: string
   label: string
@@ -450,8 +463,17 @@ function ConfigurePanel({
   const isLoRA = hp.training_approach === "lora" || hp.training_approach === "qlora"
   const suggestedId = (session.uploadResult?.rows ?? 0) < 500 ? "distilbert-base-uncased" : "roberta-base"
 
+  const reuploadWarning = session.uploadResult?.data_warnings.find(w => w.includes("Re-upload") || w.includes("re-upload"))
+
   return (
     <div className="space-y-5">
+      {/* Re-upload advisory (shown when session was pre-filled from a run) */}
+      {reuploadWarning && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-xs text-yellow-400">
+          <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <span>{reuploadWarning} Go to the Upload step to select a new file.</span>
+        </div>
+      )}
       {/* Task description */}
       <div className="space-y-2">
         <label className="text-xs font-medium text-muted-foreground">Describe your task (optional)</label>
@@ -784,13 +806,16 @@ function SetupSummary({ session }: { session: TrainingSession }) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function TrainingColumn({
-  session, messages, epochMetrics, streaming, onCancel,
+  session, messages, epochMetrics, streaming, isPaused, onCancel, onPause, onResume,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
   epochMetrics: EpochPoint[]
   streaming: boolean
+  isPaused?: boolean
   onCancel?: () => void
+  onPause?: () => void
+  onResume?: () => void
 }) {
   const completed = messages.filter(m => m.output.final !== false && m.success).map(m => m.agent)
   const progress  = (completed.length / AGENT_ORDER.length) * 100
@@ -807,15 +832,28 @@ function TrainingColumn({
           <span className="text-sm font-semibold">Training</span>
           {streaming && (
             <>
-              <span className="ml-auto text-[10px] text-primary animate-pulse flex items-center gap-1">
-                <div className="h-1.5 w-1.5 rounded-full bg-primary animate-ping" />
-                Live
-              </span>
+              {isPaused ? (
+                <span className="ml-auto text-[10px] text-yellow-400 font-medium flex items-center gap-1">
+                  <div className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
+                  Paused
+                </span>
+              ) : (
+                <span className="ml-auto text-[10px] text-primary animate-pulse flex items-center gap-1">
+                  <div className="h-1.5 w-1.5 rounded-full bg-primary animate-ping" />
+                  Live
+                </span>
+              )}
+              {isPaused && onResume ? (
+                <button onClick={onResume} className="ml-2 text-[10px] px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 transition-colors">
+                  Resume
+                </button>
+              ) : onPause ? (
+                <button onClick={onPause} className="ml-2 text-[10px] px-2 py-0.5 rounded border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 transition-colors">
+                  Pause
+                </button>
+              ) : null}
               {onCancel && (
-                <button
-                  onClick={onCancel}
-                  className="ml-2 text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
-                >
+                <button onClick={onCancel} className="ml-1 text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors">
                   Cancel
                 </button>
               )}
@@ -895,9 +933,12 @@ function TrainingColumn({
                 )
               })}
               {streaming && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground animate-pulse">
-                  <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                  Processing…
+                <div className={`flex items-center gap-2 text-xs ${isPaused ? "text-yellow-400" : "text-muted-foreground animate-pulse"}`}>
+                  {isPaused
+                    ? <div className="h-2.5 w-2.5 rounded-full bg-yellow-400/60" />
+                    : <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                  }
+                  {isPaused ? "Paused — waiting to resume…" : "Processing…"}
                 </div>
               )}
             </div>
@@ -1072,15 +1113,19 @@ function SessionLabelEditor({
 // ──────────────────────────────────────────────────────────────────────────────
 
 function SessionWorkspace({
-  session, messages, epochMetrics, streaming, onUpdate, onStartTraining, onCancel,
+  session, messages, epochMetrics, streaming, isPaused,
+  onUpdate, onStartTraining, onCancel, onPause, onResume,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
   epochMetrics: EpochPoint[]
   streaming: boolean
+  isPaused: boolean
   onUpdate: (patch: Partial<TrainingSession>) => void
   onStartTraining: () => void
   onCancel: () => void
+  onPause: () => void
+  onResume: () => void
 }) {
   return (
     <div className="flex flex-col h-full">
@@ -1108,7 +1153,7 @@ function SessionWorkspace({
           />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
-          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} onCancel={onCancel} />
+          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} isPaused={isPaused} onCancel={onCancel} onPause={onPause} onResume={onResume} />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
           <ResultsColumn session={session} />
@@ -1153,6 +1198,7 @@ export function TrainClient() {
   const [liveMessages,      setLiveMessages]      = useState<Record<string, AgentMessage[]>>({})
   const [liveEpochMetrics,  setLiveEpochMetrics]  = useState<Record<string, EpochPoint[]>>({})
   const [streamingId,       setStreamingId]       = useState<string | null>(null)
+  const [pausedIds,         setPausedIds]         = useState<Set<string>>(new Set())
   const hydratedRef = useRef(false)
 
   // Hydrate from localStorage once on mount
@@ -1206,6 +1252,41 @@ export function TrainClient() {
         dispatch({ type: "SELECT", id: session.id })
       }
     } catch { /* ignore */ }
+
+    // Check if user arrived from run detail via "Retrain with tweaks"
+    try {
+      const raw = localStorage.getItem("modelforge_retrain_prefill")
+      if (raw) {
+        const prefill = JSON.parse(raw) as RetrainPrefill
+        localStorage.removeItem("modelforge_retrain_prefill")
+        const uploadResult: UploadResult = {
+          file_id:              "",   // empty — re-upload required before training
+          filename:             prefill.datasetFilename ?? "previous-dataset",
+          rows:                 prefill.datasetRows ?? 0,
+          columns:              [...prefill.textColumns, ...prefill.labelColumns],
+          text_columns:         prefill.textColumns,
+          label_columns:        prefill.labelColumns,
+          unique_labels:        prefill.uniqueLabels,
+          class_distribution:   {},
+          text_length_stats:    {},
+          text_length_histogram:[],
+          data_warnings:        ["Dataset from a previous run — re-upload the file before starting training."],
+          duplicate_count:      0,
+          null_count:           0,
+          sample_rows:          [],
+        }
+        const session = makeSession({
+          label:           prefill.label,
+          intent:          prefill.intent,
+          selectedModelId: prefill.selectedModelId,
+          hyperParams:     { ...DEFAULT_PARAMS, ...prefill.hyperParams },
+          uploadResult,
+          setupSubstep:    "configure",
+        })
+        dispatch({ type: "ADD", session })
+        dispatch({ type: "SELECT", id: session.id })
+      }
+    } catch { /* ignore */ }
   }, [])
 
   // Persist sessions to localStorage on every change
@@ -1236,9 +1317,46 @@ export function TrainClient() {
     }
   }
 
+  async function pauseTraining(sessionId: string) {
+    const session = state.sessions.find(s => s.id === sessionId)
+    if (!session?.runId) return
+    try {
+      const res = await fetch(`${API_URL}/train/${session.runId}/pause`, { method: "POST" })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: "Could not pause" }))
+        toast.error(body.detail ?? "Could not pause"); return
+      }
+      setPausedIds(prev => new Set([...prev, sessionId]))
+      toast.info("Training paused — will stop at next step boundary.")
+    } catch {
+      toast.error("Could not reach the server to pause.")
+    }
+  }
+
+  async function resumeTraining(sessionId: string) {
+    const session = state.sessions.find(s => s.id === sessionId)
+    if (!session?.runId) return
+    try {
+      const res = await fetch(`${API_URL}/train/${session.runId}/resume`, { method: "POST" })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: "Could not resume" }))
+        toast.error(body.detail ?? "Could not resume"); return
+      }
+      setPausedIds(prev => { const next = new Set(prev); next.delete(sessionId); return next })
+      toast.success("Training resumed.")
+    } catch {
+      toast.error("Could not reach the server to resume.")
+    }
+  }
+
   async function startTraining(sessionId: string) {
     const session = state.sessions.find(s => s.id === sessionId)
     if (!session?.uploadResult) return
+
+    if (!session.uploadResult.file_id) {
+      toast.error("This session was loaded from a previous run. Re-upload your dataset first.")
+      return
+    }
 
     if (streamingId) {
       toast.error("Another session is already training. Wait for it to finish.")
@@ -1411,6 +1529,7 @@ export function TrainClient() {
       toast.error(`Pipeline error: ${err}`)
     } finally {
       setStreamingId(null)
+      setPausedIds(prev => { const next = new Set(prev); next.delete(sessionId); return next })
     }
   }
 
@@ -1435,9 +1554,12 @@ export function TrainClient() {
             messages={activeMsgs}
             epochMetrics={activeEpochMetrics}
             streaming={streamingId === activeSession.id}
+            isPaused={pausedIds.has(activeSession.id)}
             onUpdate={patch => updateSession(activeSession.id, patch)}
             onStartTraining={() => startTraining(activeSession.id)}
             onCancel={() => cancelTraining(activeSession.id)}
+            onPause={() => pauseTraining(activeSession.id)}
+            onResume={() => resumeTraining(activeSession.id)}
           />
         ) : (
           <EmptyWorkspace onAdd={addSession} />

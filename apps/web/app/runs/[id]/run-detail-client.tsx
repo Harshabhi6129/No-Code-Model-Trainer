@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { formatDistanceToNow } from "date-fns"
 import {
   ArrowLeft, CheckCircle2, XCircle, Activity, Clock,
   Database, BrainCircuit, Cpu, BarChart3, Rocket,
   AlertTriangle, RefreshCw, FileText, Copy, Check,
   ChevronDown, ChevronUp, Zap, ExternalLink, Info,
+  Download,
 } from "lucide-react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -195,6 +197,149 @@ function CodeBlock({ code, lang = "python" }: { code: string; lang?: string }) {
         <CopyButton text={code} />
       </div>
       <pre className="p-4 text-xs font-mono text-foreground overflow-x-auto leading-relaxed whitespace-pre">{code}</pre>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Retrain Button
+// ---------------------------------------------------------------------------
+
+interface RetrainPrefill {
+  intent: string
+  selectedModelId: string
+  hyperParams: {
+    task_type: string; num_epochs: number; learning_rate: number
+    batch_size: number; max_length: number; training_approach: string
+    lora_r: number; weight_decay: number; warmup_ratio: number
+  }
+  datasetFilename: string | null
+  datasetRows: number | null
+  textColumns: string[]; labelColumns: string[]; uniqueLabels: string[]
+  label: string
+  sourceRunId: string
+}
+
+function RetrainButton({ run }: { run: Run }) {
+  const router = useRouter()
+  const recipe = asRecord(run.model_recipe)
+  const intent = asRecord(run.intent_spec)
+
+  if (!run.status || !["completed", "failed"].includes(run.status)) return null
+
+  function handleRetrain() {
+    const prefill: RetrainPrefill = {
+      intent: typeof intent.user_intent === "string"
+        ? intent.user_intent
+        : `Train a ${run.task_type?.replace(/_/g, " ") ?? "classification"} model on this dataset`,
+      selectedModelId:   String(recipe.base_model ?? "roberta-base"),
+      hyperParams: {
+        task_type:         String(intent.task_type ?? run.task_type ?? "text_classification"),
+        num_epochs:        Number(recipe.num_epochs   ?? 3),
+        learning_rate:     Number(recipe.learning_rate ?? 2e-5),
+        batch_size:        Number(recipe.batch_size   ?? 16),
+        max_length:        Number(recipe.max_length   ?? 128),
+        training_approach: String(recipe.training_approach ?? "full_finetune"),
+        lora_r:            Number(recipe.lora_r        ?? 8),
+        weight_decay:      Number(recipe.weight_decay  ?? 0.01),
+        warmup_ratio:      Number(recipe.warmup_ratio  ?? 0.1),
+      },
+      datasetFilename: run.dataset_filename,
+      datasetRows:     run.dataset_rows,
+      textColumns:     typeof intent.input_column === "string" ? [intent.input_column] : [],
+      labelColumns:    typeof intent.label_column === "string" ? [intent.label_column] : [],
+      uniqueLabels:    [],
+      label:           `Retrain: ${(run.task_type ?? "run").replace(/_/g, " ")}`.slice(0, 30),
+      sourceRunId:     run.id,
+    }
+    localStorage.setItem("modelforge_retrain_prefill", JSON.stringify(prefill))
+    router.push("/train")
+  }
+
+  return (
+    <Button variant="outline" size="sm" onClick={handleRetrain} className="gap-2">
+      <RefreshCw className="h-3.5 w-3.5" /> Retrain with tweaks
+    </Button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Export Section
+// ---------------------------------------------------------------------------
+
+function ExportSection({ run }: { run: Run }) {
+  const [format, setFormat]   = useState<"onnx" | "torchscript">("onnx")
+  const [exporting, setExporting] = useState(false)
+  const [error, setError]     = useState<string | null>(null)
+
+  if (run.status !== "completed" || !run.artifact_path) return null
+
+  async function handleExport() {
+    setExporting(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API_URL}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: run.id, artifact_path: run.artifact_path, format }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: "Export failed" }))
+        throw new Error(body.detail ?? "Export failed")
+      }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement("a")
+      a.href     = url
+      a.download = `model_${run.id.slice(0, 8)}.${format === "onnx" ? "onnx" : "pt"}`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Export Model</h2>
+      <Card>
+        <CardContent className="pt-5 space-y-4">
+          <div className="flex gap-2">
+            {(["onnx", "torchscript"] as const).map(fmt => (
+              <button
+                key={fmt}
+                onClick={() => setFormat(fmt)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                  format === fmt
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+                }`}
+              >
+                {fmt === "onnx" ? "ONNX" : "TorchScript"}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {format === "onnx"
+              ? "Universal format — runs on ONNX Runtime, OpenVINO, TensorRT, and Core ML."
+              : "PyTorch-optimized — ideal for production PyTorch servers and mobile deployment."}
+          </p>
+          {error && (
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-xs text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              {error}
+            </div>
+          )}
+          <Button onClick={handleExport} disabled={exporting} size="sm" className="gap-2">
+            {exporting
+              ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Converting…</>
+              : <><Download className="h-3.5 w-3.5" />Export {format.toUpperCase()}</>
+            }
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -569,13 +714,16 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
           {run.model_id && <p className="text-sm text-muted-foreground font-mono">{run.model_id}</p>}
           <p className="text-xs text-muted-foreground/60 font-mono">{run.id}</p>
         </div>
-        {run.status === "completed" && run.hf_model_url && (
-          <Button asChild size="sm">
-            <a href={run.hf_model_url} target="_blank" rel="noreferrer">
-              <Rocket className="h-4 w-4 mr-2" /> View on HF Hub
-            </a>
-          </Button>
-        )}
+        <div className="flex gap-2 flex-wrap">
+          <RetrainButton run={run} />
+          {run.status === "completed" && run.hf_model_url && (
+            <Button asChild size="sm">
+              <a href={run.hf_model_url} target="_blank" rel="noreferrer">
+                <Rocket className="h-4 w-4 mr-2" /> View on HF Hub
+              </a>
+            </Button>
+          )}
+        </div>
       </div>
 
       {run.status === "running" && (
@@ -687,6 +835,9 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
 
       {/* Deploy Section */}
       <DeploySection run={run} />
+
+      {/* Export Section */}
+      <ExportSection run={run} />
 
       {/* Inference Playground */}
       <InferencePlayground run={run} />
