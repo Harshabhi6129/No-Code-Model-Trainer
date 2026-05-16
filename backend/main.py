@@ -7,9 +7,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
+
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
-from fastapi.background import BackgroundTask
+from starlette.background import BackgroundTask
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
