@@ -1,22 +1,20 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import {
   Database, FileText, BarChart3, AlertTriangle, CloudUpload,
-  ArrowRight, Loader2, Trash2, RefreshCw,
+  ArrowRight, Loader2, Trash2, RefreshCw, Pencil, Check, X,
 } from "lucide-react"
 import { toast } from "sonner"
-import { cn } from "@/lib/utils"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const LS_SESSIONS = "modelforge_sessions_v2"
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Types (mirrors UploadResult from train-client)
+// Types
 // ──────────────────────────────────────────────────────────────────────────────
 
 interface StoredDataset {
@@ -30,7 +28,6 @@ interface StoredDataset {
   class_distribution: Record<string, number>
   duplicate_count: number
   null_count: number
-  // derived
   sessionCount: number
   lastUsed: number
 }
@@ -41,8 +38,11 @@ interface StoredDataset {
 
 export function DatasetsClient() {
   const router = useRouter()
-  const [datasets, setDatasets] = useState<StoredDataset[]>([])
-  const [checking, setChecking] = useState<string | null>(null)
+  const [datasets, setDatasets]         = useState<StoredDataset[]>([])
+  const [checking, setChecking]         = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [renaming, setRenaming]         = useState<string | null>(null)
+  const [renameValue, setRenameValue]   = useState("")
 
   function loadFromStorage() {
     try {
@@ -67,9 +67,7 @@ export function DatasetsClient() {
         }
       }
 
-      setDatasets(
-        Object.values(byId).sort((a, b) => b.lastUsed - a.lastUsed)
-      )
+      setDatasets(Object.values(byId).sort((a, b) => b.lastUsed - a.lastUsed))
     } catch {
       setDatasets([])
     }
@@ -78,12 +76,10 @@ export function DatasetsClient() {
   useEffect(() => { loadFromStorage() }, [])
 
   async function trainWithDataset(ds: StoredDataset) {
-    // Verify file still exists on backend before navigating
     setChecking(ds.file_id)
     try {
       const res = await fetch(`${API_URL}/health`)
       if (!res.ok) throw new Error("Backend unavailable")
-      // Backend is up — assume file is still registered (FILE_REGISTRY persists via .meta.json)
       const uploadResult = {
         file_id:              ds.file_id,
         filename:             ds.filename,
@@ -107,6 +103,65 @@ export function DatasetsClient() {
     } finally {
       setChecking(null)
     }
+  }
+
+  async function handleDelete(file_id: string) {
+    try {
+      await fetch(`${API_URL}/datasets/${file_id}`, { method: "DELETE" })
+    } catch { /* backend offline — still clean localStorage */ }
+
+    try {
+      const raw = localStorage.getItem(LS_SESSIONS)
+      if (raw) {
+        const sessions = JSON.parse(raw)
+        const filtered = sessions.filter(
+          (s: { uploadResult?: { file_id?: string } }) =>
+            s.uploadResult?.file_id !== file_id
+        )
+        localStorage.setItem(LS_SESSIONS, JSON.stringify(filtered))
+      }
+    } catch {}
+
+    setConfirmDelete(null)
+    loadFromStorage()
+    toast.success("Dataset removed.")
+  }
+
+  async function handleRename(file_id: string, newName: string) {
+    const trimmed = newName.trim()
+    if (!trimmed) { toast.error("Name cannot be empty."); return }
+
+    try {
+      await fetch(`${API_URL}/datasets/${file_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: trimmed }),
+      })
+    } catch {}
+
+    try {
+      const raw = localStorage.getItem(LS_SESSIONS)
+      if (raw) {
+        const sessions = JSON.parse(raw)
+        const updated = sessions.map((s: { uploadResult?: { file_id?: string; filename?: string } }) => {
+          if (s.uploadResult?.file_id === file_id) {
+            return { ...s, uploadResult: { ...s.uploadResult, filename: trimmed } }
+          }
+          return s
+        })
+        localStorage.setItem(LS_SESSIONS, JSON.stringify(updated))
+      }
+    } catch {}
+
+    setRenaming(null)
+    loadFromStorage()
+    toast.success("Dataset renamed.")
+  }
+
+  function startRename(ds: StoredDataset) {
+    setRenaming(ds.file_id)
+    setRenameValue(ds.filename)
+    setConfirmDelete(null)
   }
 
   return (
@@ -152,7 +207,17 @@ export function DatasetsClient() {
               key={ds.file_id}
               ds={ds}
               checking={checking === ds.file_id}
+              confirming={confirmDelete === ds.file_id}
+              isRenaming={renaming === ds.file_id}
+              renameValue={renaming === ds.file_id ? renameValue : ""}
               onTrain={() => trainWithDataset(ds)}
+              onDelete={() => handleDelete(ds.file_id)}
+              onConfirmDelete={() => setConfirmDelete(ds.file_id)}
+              onCancelDelete={() => setConfirmDelete(null)}
+              onStartRename={() => startRename(ds)}
+              onRenameChange={setRenameValue}
+              onRenameCommit={() => handleRename(ds.file_id, renameValue)}
+              onRenameCancel={() => setRenaming(null)}
             />
           ))}
         </div>
@@ -166,11 +231,23 @@ export function DatasetsClient() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function DatasetCard({
-  ds, checking, onTrain,
+  ds, checking, confirming, isRenaming, renameValue,
+  onTrain, onDelete, onConfirmDelete, onCancelDelete,
+  onStartRename, onRenameChange, onRenameCommit, onRenameCancel,
 }: {
   ds: StoredDataset
   checking: boolean
+  confirming: boolean
+  isRenaming: boolean
+  renameValue: string
   onTrain: () => void
+  onDelete: () => void
+  onConfirmDelete: () => void
+  onCancelDelete: () => void
+  onStartRename: () => void
+  onRenameChange: (v: string) => void
+  onRenameCommit: () => void
+  onRenameCancel: () => void
 }) {
   const topLabels = Object.entries(ds.class_distribution)
     .sort((a, b) => b[1] - a[1])
@@ -183,19 +260,70 @@ function DatasetCard({
       <CardContent className="p-4 space-y-3">
         {/* Header */}
         <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
             <div className="h-8 w-8 shrink-0 rounded-md bg-primary/10 flex items-center justify-center">
               <FileText className="h-4 w-4 text-primary" />
             </div>
-            <div className="min-w-0">
-              <p className="font-semibold text-sm truncate">{ds.filename}</p>
+            <div className="min-w-0 flex-1">
+              {isRenaming ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={e => onRenameChange(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") onRenameCommit()
+                      if (e.key === "Escape") onRenameCancel()
+                    }}
+                    className="flex-1 min-w-0 px-1.5 py-0.5 text-sm font-semibold bg-background border border-primary rounded focus:outline-none"
+                  />
+                  <button onClick={onRenameCommit} className="text-emerald-400 hover:text-emerald-300">
+                    <Check className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={onRenameCancel} className="text-muted-foreground hover:text-foreground">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <p className="font-semibold text-sm truncate">{ds.filename}</p>
+              )}
               <p className="text-[10px] text-muted-foreground font-mono">{ds.file_id.slice(0, 8)}…</p>
             </div>
           </div>
-          <span className="text-[10px] shrink-0 px-2 py-0.5 rounded bg-secondary text-muted-foreground border border-border">
-            {ds.sessionCount} session{ds.sessionCount !== 1 ? "s" : ""}
-          </span>
+
+          {/* Actions */}
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-[10px] px-2 py-0.5 rounded bg-secondary text-muted-foreground border border-border">
+              {ds.sessionCount} session{ds.sessionCount !== 1 ? "s" : ""}
+            </span>
+            <button
+              onClick={onStartRename}
+              title="Rename"
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={onConfirmDelete}
+              title="Delete"
+              className="p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
+
+        {/* Delete confirmation strip */}
+        {confirming && (
+          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-xs">
+            <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
+            <span className="flex-1 text-destructive">
+              Delete this dataset and {ds.sessionCount} session{ds.sessionCount !== 1 ? "s" : ""}?
+            </span>
+            <button onClick={onDelete} className="text-destructive font-medium hover:underline">Delete</button>
+            <button onClick={onCancelDelete} className="text-muted-foreground hover:underline">Cancel</button>
+          </div>
+        )}
 
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-2">
@@ -229,16 +357,13 @@ function DatasetCard({
         {topLabels.length > 0 && (
           <div className="space-y-1">
             <p className="text-[10px] font-medium text-muted-foreground">Class distribution</p>
-            {topLabels.map(([label, count], i) => {
+            {topLabels.map(([label, count]) => {
               const pct = Math.round((count / totalRows) * 100)
               return (
                 <div key={label} className="flex items-center gap-2">
                   <span className="text-[10px] text-muted-foreground w-20 truncate">{label}</span>
                   <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-primary/60"
-                      style={{ width: `${pct}%` }}
-                    />
+                    <div className="h-full rounded-full bg-primary/60" style={{ width: `${pct}%` }} />
                   </div>
                   <span className="text-[10px] text-muted-foreground w-8 text-right">{pct}%</span>
                 </div>
@@ -251,16 +376,10 @@ function DatasetCard({
         )}
 
         {/* CTA */}
-        <Button
-          size="sm"
-          className="w-full gap-1.5"
-          onClick={onTrain}
-          disabled={checking}
-        >
+        <Button size="sm" className="w-full gap-1.5" onClick={onTrain} disabled={checking}>
           {checking
             ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            : <ArrowRight className="h-3.5 w-3.5" />
-          }
+            : <ArrowRight className="h-3.5 w-3.5" />}
           {checking ? "Checking…" : "Train with this dataset"}
         </Button>
       </CardContent>

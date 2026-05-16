@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 _KEEPALIVE_INTERVAL = 20   # seconds between keepalive SSE events
 _TRAINING_TIMEOUT   = 3600 # hard cap: 60 minutes
 
-# Registry: run_id → (asyncio.Task, cancel_event) — allows external cancellation
-_active_runs: dict[str, tuple["asyncio.Task[Any]", threading.Event]] = {}
+# Registry: run_id → (asyncio.Task, cancel_event, pause_event)
+_active_runs: dict[str, tuple["asyncio.Task[Any]", threading.Event, threading.Event]] = {}
 
 
 class TrainAgent(BaseAgent):
@@ -139,6 +139,8 @@ class TrainAgent(BaseAgent):
         progress_log: list[dict] = []
         progress_lock = threading.Lock()
         cancel_event = threading.Event()
+        pause_event  = threading.Event()
+        pause_event.set()  # start in running state (set = unblocked)
         _emitted_steps: set[int] = set()  # track which steps we've already streamed
 
         training_task = asyncio.create_task(
@@ -161,10 +163,11 @@ class TrainAgent(BaseAgent):
                 progress_log=progress_log,
                 progress_lock=progress_lock,
                 cancel_event=cancel_event,
+                pause_event=pause_event,
             )
         )
         if context.run_id:
-            _active_runs[context.run_id] = (training_task, cancel_event)
+            _active_runs[context.run_id] = (training_task, cancel_event, pause_event)
 
         # ── Keepalive loop ────────────────────────────────────────────────────
         while not training_task.done():
@@ -217,7 +220,10 @@ class TrainAgent(BaseAgent):
                 break
 
         # ── Resolve result ────────────────────────────────────────────────────
-        _active_runs.pop(context.run_id, None)
+        # Unblock any paused thread before removing from registry
+        entry = _active_runs.pop(context.run_id, None)
+        if entry is not None:
+            entry[2].set()  # ensure pause_event is set so thread doesn't hang
 
         try:
             result = training_task.result()
@@ -317,14 +323,43 @@ class TrainAgent(BaseAgent):
 
 
 def cancel_run(run_id: str) -> bool:
-    """
-    Signal the active training run to stop at the next step boundary.
-    Returns True if a run was found and signalled; False if run_id is unknown.
-    """
+    """Signal the active run to stop at the next step boundary."""
     entry = _active_runs.get(run_id)
     if entry is None:
         return False
-    _task, event = entry
-    event.set()
+    _task, cancel_event, pause_event = entry
+    cancel_event.set()
+    pause_event.set()  # unblock any paused thread so it can see the cancel
     logger.info("[%s] Cancel signalled", run_id)
     return True
+
+
+def pause_run(run_id: str) -> bool:
+    """Block training at the next step boundary."""
+    entry = _active_runs.get(run_id)
+    if entry is None:
+        return False
+    _task, _cancel, pause_event = entry
+    pause_event.clear()
+    logger.info("[%s] Pause signalled", run_id)
+    return True
+
+
+def resume_run(run_id: str) -> bool:
+    """Unblock a paused training run."""
+    entry = _active_runs.get(run_id)
+    if entry is None:
+        return False
+    _task, _cancel, pause_event = entry
+    pause_event.set()
+    logger.info("[%s] Resume signalled", run_id)
+    return True
+
+
+def is_paused(run_id: str) -> bool:
+    """Return True if the run's pause_event is cleared (blocked)."""
+    entry = _active_runs.get(run_id)
+    if entry is None:
+        return False
+    _task, _cancel, pause_event = entry
+    return not pause_event.is_set()

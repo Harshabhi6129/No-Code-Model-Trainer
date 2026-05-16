@@ -307,6 +307,7 @@ def _blocking_train(
     progress_log: list | None = None,
     progress_lock: "threading.Lock | None" = None,
     cancel_event: "threading.Event | None" = None,
+    pause_event: "threading.Event | None" = None,
 ) -> TrainingResult:
     """
     Full HuggingFace training + evaluation pipeline.
@@ -558,6 +559,19 @@ def _blocking_train(
             if cancel_event is not None and cancel_event.is_set():
                 control.should_training_stop = True
 
+    # ── Pause callback (block at each step when pause_event is cleared) ───────
+    class PauseCallback(TrainerCallback):
+        """Blocks at each step boundary until pause_event is set (resumed)."""
+        def on_step_begin(
+            self,
+            args: TrainingArguments,
+            state: TrainerState,
+            control: TrainerControl,
+            **kw: Any,
+        ) -> None:
+            if pause_event is not None:
+                pause_event.wait()  # blocks until .set() is called
+
     # ── Mixed precision & device flags ────────────────────────────────────────
     use_fp16 = False
     use_bf16 = False
@@ -600,6 +614,7 @@ def _blocking_train(
 
     epoch_cbs  = [EpochProgressCallback()] if (progress_log is not None and progress_lock is not None) else []
     cancel_cbs = [CancelCallback()] if cancel_event is not None else []
+    pause_cbs  = [PauseCallback()]  if pause_event  is not None else []
 
     trainer = Trainer(
         model=model,
@@ -613,6 +628,7 @@ def _blocking_train(
             EarlyStoppingCallback(early_stopping_patience=2),
             *epoch_cbs,
             *cancel_cbs,
+            *pause_cbs,
         ],
     )
 
@@ -670,7 +686,7 @@ def _blocking_train(
                 eval_dataset=test_ds,
                 tokenizer=tokenizer,
                 data_collator=collator,
-                callbacks=[DivergenceCallback(), *epoch_cbs, *cancel_cbs],
+                callbacks=[DivergenceCallback(), *epoch_cbs, *cancel_cbs, *pause_cbs],
             )
             train_output = trainer_retry.train()
             if cancel_event is not None and cancel_event.is_set():
@@ -778,6 +794,7 @@ async def train_model_async(
     progress_log: list | None = None,
     progress_lock: "threading.Lock | None" = None,
     cancel_event: "threading.Event | None" = None,
+    pause_event: "threading.Event | None" = None,
 ) -> TrainingResult:
     """Non-blocking wrapper — runs the blocking trainer in a thread pool."""
     return await asyncio.to_thread(
@@ -799,4 +816,5 @@ async def train_model_async(
         progress_log=progress_log,
         progress_lock=progress_lock,
         cancel_event=cancel_event,
+        pause_event=pause_event,
     )
