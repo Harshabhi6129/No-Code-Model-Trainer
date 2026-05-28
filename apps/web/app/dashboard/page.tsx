@@ -2,73 +2,144 @@ import { AppShell } from "@/components/layout/app-shell"
 import { createClient } from "@/lib/supabase/server"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+import { StatRing } from "@/components/ui/stat-ring"
+import { PageHeader } from "@/components/ui/page-header"
 import Link from "next/link"
 import { formatDistanceToNow } from "date-fns"
 import {
-  Plus, Activity, CheckCircle2, Clock, XCircle,
-  Zap, ArrowRight, BarChart3, Cpu
+  Plus, Activity, CheckCircle2, Clock, XCircle, Zap, ArrowRight,
+  BarChart3, Cpu, Sparkles, FlaskConical, TrendingUp, Database,
+  LayoutDashboard,
 } from "lucide-react"
 import type { Run } from "@/lib/supabase/types"
 
-const statusConfig: Record<string, { icon: React.ElementType; color: string; badge: "default" | "secondary" | "destructive" | "outline" }> = {
-  completed: { icon: CheckCircle2, color: "text-emerald-400", badge: "default" },
-  running:   { icon: Activity,     color: "text-blue-400",    badge: "secondary" },
-  pending:   { icon: Clock,        color: "text-yellow-400",  badge: "outline" },
-  failed:    { icon: XCircle,      color: "text-destructive", badge: "destructive" },
-  cancelled: { icon: XCircle,      color: "text-muted-foreground", badge: "outline" },
+/* ── Status config ──────────────────────────────────────────────── */
+const statusCfg: Record<string, {
+  icon: React.ElementType
+  textClass: string
+  badge: React.ComponentProps<typeof Badge>["variant"]
+  label: string
+}> = {
+  completed: { icon: CheckCircle2, textClass: "text-emerald-400", badge: "success",     label: "Completed" },
+  running:   { icon: Activity,     textClass: "text-cyan-400",    badge: "running",     label: "Running"   },
+  pending:   { icon: Clock,        textClass: "text-amber-400",   badge: "warning",     label: "Pending"   },
+  failed:    { icon: XCircle,      textClass: "text-rose-400",    badge: "destructive", label: "Failed"    },
+  cancelled: { icon: XCircle,      textClass: "text-muted-foreground", badge: "secondary", label: "Cancelled" },
 }
 
-function StatCard({ label, value, icon: Icon, sub }: { label: string; value: string | number; icon: React.ElementType; sub?: string }) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-sm text-muted-foreground mb-1">{label}</p>
-            <p className="text-3xl font-bold">{value}</p>
-            {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
-          </div>
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-            <Icon className="h-4 w-4 text-primary" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function RunRow({ run }: { run: Run }) {
-  const cfg = statusConfig[run.status] ?? statusConfig.pending
-  const StatusIcon = cfg.icon
+/* ── Run row ────────────────────────────────────────────────────── */
+function RunRow({ run, index }: { run: Run; index: number }) {
+  const cfg     = statusCfg[run.status] ?? statusCfg.pending
+  const Icon    = cfg.icon
   const metrics = run.metrics as Record<string, unknown>
   const accuracy = typeof metrics?.accuracy === "number"
-    ? `${(metrics.accuracy * 100).toFixed(1)}%` : "—"
+    ? `${(metrics.accuracy * 100).toFixed(1)}%` : null
+  const f1Score  = typeof metrics?.f1 === "number" ? metrics.f1.toFixed(3) : null
 
   return (
-    <Link href={`/runs/${run.id}`} className="flex items-center gap-4 py-3 hover:bg-secondary/50 px-4 -mx-4 rounded-lg transition-colors group">
-      <StatusIcon className={`h-4 w-4 shrink-0 ${cfg.color}`} />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">
+    <Link
+      href={`/runs/${run.id}`}
+      className="group relative flex items-center gap-4 px-6 py-4 border-b border-border/40 last:border-0 transition-all duration-200 hover:bg-surface-elevated/50"
+    >
+      {/* Left accent bar on hover */}
+      <div
+        className="absolute left-0 top-4 bottom-4 w-0.5 rounded-r opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+        style={{ background: "linear-gradient(180deg, hsl(var(--indigo)), hsl(var(--violet)))" }}
+      />
+
+      {/* Status icon */}
+      <div className={`relative shrink-0 ${cfg.textClass}`}>
+        <Icon className="h-4 w-4" />
+        {run.status === "running" && (
+          <span
+            className="ping-dot absolute inset-[-3px] rounded-full"
+            style={{ color: "hsl(var(--cyan))" }}
+          />
+        )}
+      </div>
+
+      {/* Task info */}
+      <div className="flex-1 min-w-0 space-y-1">
+        <p className="text-sm font-medium capitalize text-foreground">
           {run.task_type?.replace(/_/g, " ") ?? "Training run"}
         </p>
-        <p className="text-xs text-muted-foreground truncate font-mono">
-          {run.model_id ?? "—"} · {run.dataset_filename ?? "no file"}
+        <p className="text-xs text-muted-foreground font-mono truncate">
+          <span className="text-foreground/60">{run.model_id ?? "—"}</span>
+          <span className="mx-1.5 opacity-30">·</span>
+          {run.dataset_filename ?? "no dataset"}
+          {run.dataset_rows && (
+            <>
+              <span className="mx-1.5 opacity-30">·</span>
+              {run.dataset_rows.toLocaleString()} rows
+            </>
+          )}
         </p>
       </div>
-      <div className="flex items-center gap-4 shrink-0">
-        <span className="text-sm text-muted-foreground hidden md:block">{accuracy}</span>
-        <Badge variant={cfg.badge} className="text-xs capitalize">{run.status}</Badge>
-        <span className="text-xs text-muted-foreground hidden lg:block">
-          {formatDistanceToNow(new Date(run.created_at), { addSuffix: true })}
-        </span>
-        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+
+      {/* Metrics */}
+      <div className="hidden md:flex flex-col items-end gap-0.5 shrink-0 min-w-[56px]">
+        {accuracy ? (
+          <>
+            <span className="text-sm font-bold font-mono text-foreground">{accuracy}</span>
+            {f1Score && (
+              <span className="text-[10px] text-muted-foreground font-mono">F1 {f1Score}</span>
+            )}
+          </>
+        ) : (
+          <span className="text-sm text-muted-foreground/30 font-mono">—</span>
+        )}
       </div>
+
+      {/* Status badge */}
+      <Badge variant={cfg.badge} dot pulse={run.status === "running"} className="shrink-0">
+        {cfg.label}
+      </Badge>
+
+      {/* Time */}
+      <span className="text-[11px] text-muted-foreground hidden lg:block shrink-0 w-24 text-right font-mono">
+        {formatDistanceToNow(new Date(run.created_at), { addSuffix: true })}
+      </span>
+
+      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-muted-foreground/60 group-hover:translate-x-0.5 transition-all duration-200 shrink-0" />
     </Link>
   )
 }
 
+/* ── Quick-start cards ──────────────────────────────────────────── */
+const quickStart = [
+  {
+    icon: FlaskConical,
+    iconClass: "text-indigo-400",
+    iconBg: "bg-indigo-500/10",
+    glowColor: "hsl(var(--indigo) / 0.18)",
+    title: "Text Classification",
+    description: "Classify support tickets, reviews, or any text by category using LoRA fine-tuning.",
+    tag: "Most popular",
+    tagVariant: "default" as const,
+  },
+  {
+    icon: Database,
+    iconClass: "text-violet-400",
+    iconBg: "bg-violet-500/10",
+    glowColor: "hsl(var(--violet) / 0.16)",
+    title: "NER · Entity Extraction",
+    description: "Extract people, places, and products from unstructured text with token classification.",
+    tag: "v0.2",
+    tagVariant: "violet" as const,
+  },
+  {
+    icon: Sparkles,
+    iconClass: "text-cyan-400",
+    iconBg: "bg-cyan-500/10",
+    glowColor: "hsl(var(--cyan) / 0.14)",
+    title: "LLM Fine-Tuning",
+    description: "Teach Llama, Mistral, or Qwen your domain knowledge using QLoRA on 4-bit weights.",
+    tag: "QLoRA",
+    tagVariant: "running" as const,
+  },
+]
+
+/* ── Page ───────────────────────────────────────────────────────── */
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -78,97 +149,197 @@ export default async function DashboardPage() {
     .select("*")
     .eq("user_id", user!.id)
     .order("created_at", { ascending: false })
-    .limit(10)
+    .limit(8)
 
-  const allRuns: Run[] = runs ?? []
+  const allRuns   = (runs ?? []) as Run[]
   const completed = allRuns.filter((r) => r.status === "completed").length
   const running   = allRuns.filter((r) => r.status === "running").length
-  const avgAcc    = allRuns.reduce((sum, r) => {
-    const m = r.metrics as Record<string, unknown>
-    return sum + (typeof m?.accuracy === "number" ? m.accuracy : 0)
-  }, 0) / Math.max(completed, 1)
+  const pending   = allRuns.filter((r) => r.status === "pending").length
+
+  const avgAcc = completed > 0
+    ? allRuns.reduce((sum, r) => {
+        const m = r.metrics as Record<string, unknown>
+        return sum + (typeof m?.accuracy === "number" ? m.accuracy : 0)
+      }, 0) / completed
+    : 0
 
   const firstName = user?.email?.split("@")[0] ?? "there"
+  const hour      = new Date().getHours()
+  const greeting  = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
 
   return (
     <AppShell>
-      <div className="p-8 max-w-5xl mx-auto space-y-8">
-        {/* Header */}
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Good to see you, {firstName}</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              {allRuns.length === 0
-                ? "Start your first training run to see results here."
-                : `${allRuns.length} run${allRuns.length !== 1 ? "s" : ""} total`}
-            </p>
-          </div>
+      {/* ── Page header ────────────────────────────────── */}
+      <PageHeader
+        icon={LayoutDashboard}
+        iconColor="text-indigo-400"
+        title="Dashboard"
+        description={
+          allRuns.length === 0
+            ? "No runs yet — start your first training below."
+            : `${allRuns.length} run${allRuns.length !== 1 ? "s" : ""} · ${completed} completed`
+        }
+        actions={
           <Button asChild>
             <Link href="/train">
-              <Plus className="h-4 w-4 mr-2" /> New Run
+              <Plus className="h-4 w-4" />
+              New Run
             </Link>
           </Button>
+        }
+      />
+
+      <div className="px-8 py-7 max-w-5xl mx-auto space-y-8 animate-fade-in">
+
+        {/* ── Greeting ───────────────────────────────────── */}
+        <div className="space-y-1">
+          <h2 className="text-2xl font-bold tracking-tight">
+            {greeting},{" "}
+            <span className="text-gradient capitalize">{firstName}</span>
+          </h2>
+          <p className="text-sm text-muted-foreground font-mono">
+            {new Date().toLocaleDateString("en-US", {
+              weekday: "long", month: "long", day: "numeric",
+            })}
+            {running > 0 && (
+              <span className="ml-3 text-cyan-400">
+                · {running} active run{running !== 1 ? "s" : ""}
+              </span>
+            )}
+          </p>
         </div>
 
-        {/* Stats */}
+        {/* ── Animated stat rings ─────────────────────────── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Total Runs"  value={allRuns.length} icon={Activity} />
-          <StatCard label="Completed"   value={completed}       icon={CheckCircle2} />
-          <StatCard label="In Progress" value={running}         icon={Cpu} />
-          <StatCard
-            label="Avg Accuracy"
+          <StatRing
+            value={allRuns.length}
+            label="Total Runs"
+            icon={Activity}
+            color="indigo"
+            fillPercent={Math.min(allRuns.length * 10, 100)}
+            delay={0}
+          />
+          <StatRing
+            value={completed}
+            label="Completed"
+            icon={CheckCircle2}
+            color="emerald"
+            fillPercent={allRuns.length > 0 ? (completed / allRuns.length) * 100 : 0}
+            sub={allRuns.length > 0 ? `${Math.round((completed / allRuns.length) * 100)}% success rate` : undefined}
+            delay={80}
+          />
+          <StatRing
+            value={running + pending}
+            label="In Progress"
+            icon={Cpu}
+            color="cyan"
+            fillPercent={(running + pending) > 0 ? 70 : 0}
+            sub={running > 0 ? `${running} training` : pending > 0 ? `${pending} queued` : undefined}
+            delay={160}
+          />
+          <StatRing
             value={completed > 0 ? `${(avgAcc * 100).toFixed(1)}%` : "—"}
+            label="Avg Accuracy"
             icon={BarChart3}
-            sub={completed > 0 ? `across ${completed} run${completed !== 1 ? "s" : ""}` : undefined}
+            color="violet"
+            fillPercent={avgAcc * 100}
+            sub={completed > 0 ? `over ${completed} run${completed !== 1 ? "s" : ""}` : "no data yet"}
+            delay={240}
           />
         </div>
 
-        {/* Runs list */}
-        <Card>
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Recent Runs</CardTitle>
+        {/* ── Recent runs ────────────────────────────────── */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold tracking-tight">Recent Runs</h3>
+            </div>
             {allRuns.length > 5 && (
               <Button variant="ghost" size="sm" asChild>
-                <Link href="/runs">View all <ArrowRight className="ml-1.5 h-3.5 w-3.5" /></Link>
+                <Link href="/runs">
+                  View all <ArrowRight className="h-3 w-3" />
+                </Link>
               </Button>
             )}
-          </CardHeader>
-          <CardContent>
+          </div>
+
+          <div
+            className="rounded-xl border border-border overflow-hidden"
+            style={{ background: "hsl(var(--surface) / 0.6)" }}
+          >
             {allRuns.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-secondary">
-                  <Zap className="h-6 w-6 text-muted-foreground" />
+              <div className="flex flex-col items-center justify-center py-20 gap-5 text-center px-8">
+                <div
+                  className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border"
+                  style={{
+                    background: "linear-gradient(135deg, hsl(var(--indigo) / 0.1), hsl(var(--violet) / 0.06))",
+                  }}
+                >
+                  <Zap className="h-7 w-7 text-indigo-400" />
                 </div>
-                <div>
-                  <p className="font-medium">No training runs yet</p>
-                  <p className="text-sm text-muted-foreground mt-1">Upload a dataset and describe your task to get started.</p>
+                <div className="space-y-1.5">
+                  <p className="font-semibold text-foreground">No training runs yet</p>
+                  <p className="text-sm text-muted-foreground max-w-sm">
+                    Describe your task in plain English — agents handle data cleaning, model selection, training, and evaluation.
+                  </p>
                 </div>
                 <Button asChild>
-                  <Link href="/train">Start your first run <ArrowRight className="ml-2 h-3.5 w-3.5" /></Link>
+                  <Link href="/train">
+                    <Zap className="h-4 w-4" />
+                    Start your first run
+                  </Link>
                 </Button>
               </div>
             ) : (
-              <div className="divide-y divide-border/50">
-                {allRuns.map((run) => <RunRow key={run.id} run={run} />)}
-              </div>
+              allRuns.map((run, i) => <RunRow key={run.id} run={run} index={i} />)
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        {/* Quick start cards */}
+        {/* ── Quick start (only before first run) ────────── */}
         {allRuns.length === 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {[
-              { title: "Text Classification", desc: "Classify support tickets, reviews, or any text by category.", href: "/train" },
-              { title: "Named Entity Recognition", desc: "Extract people, places, products from unstructured text.", href: "/train" },
-              { title: "LLM Fine-Tuning", desc: "Teach a language model your domain knowledge with LoRA.", href: "/train" },
-            ].map((c) => (
-              <Link key={c.title} href={c.href} className="p-5 rounded-xl border border-border bg-card hover:border-primary/30 hover:bg-primary/5 transition-colors group">
-                <p className="font-semibold text-sm mb-1.5 group-hover:text-primary transition-colors">{c.title}</p>
-                <p className="text-xs text-muted-foreground leading-relaxed">{c.desc}</p>
-                <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-3 group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
-              </Link>
-            ))}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold tracking-tight">Task Templates</h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {quickStart.map((c) => (
+                <Link
+                  key={c.title}
+                  href="/train"
+                  className="group relative flex flex-col gap-4 p-5 rounded-xl border border-border overflow-hidden transition-all duration-300 hover:border-border-bright"
+                  style={{ background: "hsl(var(--surface) / 0.7)" }}
+                >
+                  {/* Corner glow */}
+                  <div
+                    className="absolute -top-8 -right-8 h-24 w-24 rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
+                    style={{ background: c.glowColor }}
+                  />
+
+                  <div className="flex items-start justify-between relative">
+                    <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${c.iconBg}`}>
+                      <c.icon className={`h-4 w-4 ${c.iconClass}`} />
+                    </div>
+                    <Badge variant={c.tagVariant} className="text-[10px]">{c.tag}</Badge>
+                  </div>
+
+                  <div className="relative">
+                    <p className="font-semibold text-sm text-foreground group-hover:text-gradient transition-all duration-300">
+                      {c.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{c.description}</p>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground group-hover:text-indigo-400 transition-colors duration-200 mt-auto relative">
+                    <span>Start training</span>
+                    <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform duration-200" />
+                  </div>
+                </Link>
+              ))}
+            </div>
           </div>
         )}
       </div>
