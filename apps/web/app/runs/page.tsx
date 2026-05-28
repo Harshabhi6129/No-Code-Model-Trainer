@@ -43,7 +43,7 @@ function RunRow({ run, index }: { run: Run; index: number }) {
       {/* Left accent bar */}
       <div
         className="absolute left-0 top-4 bottom-4 w-0.5 rounded-r opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-        style={{ background: "linear-gradient(180deg, hsl(var(--indigo)), hsl(var(--violet)))" }}
+        style={{ background: "linear-gradient(180deg, var(--primary), var(--accent))" }}
       />
 
       {/* Status icon */}
@@ -52,7 +52,7 @@ function RunRow({ run, index }: { run: Run; index: number }) {
         {run.status === "running" && (
           <span
             className="ping-dot absolute inset-[-3px] rounded-full"
-            style={{ color: "hsl(var(--cyan))" }}
+            style={{ color: "var(--cyan)" }}
           />
         )}
       </div>
@@ -190,7 +190,7 @@ export default async function RunsPage() {
         {/* Runs list */}
         <div
           className="rounded-xl border border-border overflow-hidden"
-          style={{ background: "hsl(var(--surface) / 0.6)" }}
+          style={{ background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}
         >
           {/* Column header row */}
           {allRuns.length > 0 && (
@@ -217,7 +217,7 @@ export default async function RunsPage() {
               <div
                 className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border"
                 style={{
-                  background: "linear-gradient(135deg, hsl(var(--indigo) / 0.1), hsl(var(--violet) / 0.06))",
+                  background: "linear-gradient(135deg, var(--primary-10), color-mix(in srgb, var(--accent) 6%, transparent))",
                 }}
               >
                 <ListOrdered className="h-7 w-7 text-indigo-400" />

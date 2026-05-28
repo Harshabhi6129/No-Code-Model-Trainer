@@ -39,7 +39,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
     <aside
       className="fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-border/70"
       style={{
-        background: "linear-gradient(180deg, hsl(222 42% 7% / 0.93) 0%, hsl(222 47% 5% / 0.97) 100%)",
+        background: "linear-gradient(180deg, color-mix(in srgb, var(--surface) 93%, transparent) 0%, color-mix(in srgb, var(--bg) 97%, transparent) 100%)",
         backdropFilter: "blur(20px) saturate(1.4)",
         WebkitBackdropFilter: "blur(20px) saturate(1.4)",
       }}
@@ -50,14 +50,14 @@ export function Sidebar({ userEmail }: SidebarProps) {
         <div
           className="relative flex h-8 w-8 items-center justify-center rounded-lg shrink-0 animate-glow-breathe"
           style={{
-            background: "linear-gradient(135deg, hsl(var(--indigo) / 0.18), hsl(var(--violet) / 0.12))",
-            border: "1px solid hsl(var(--indigo) / 0.28)",
+            background: "var(--primary-10)",
+            border: "1px solid var(--primary-30)",
           }}
         >
-          <BrainCircuit className="h-4 w-4" style={{ color: "hsl(var(--indigo))" }} />
+          <BrainCircuit className="h-4 w-4" style={{ color: "var(--primary)" }} />
           <span
             className="absolute inset-0 rounded-lg animate-neural-pulse pointer-events-none"
-            style={{ border: "1px solid hsl(var(--indigo) / 0.35)" }}
+            style={{ border: "1px solid var(--primary-30)" }}
           />
         </div>
 
@@ -143,8 +143,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
         <button
           onClick={signOut}
           className="group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:text-rose-400"
-          style={{ ["--hover-bg" as string]: "hsl(var(--rose) / 0.06)" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "hsl(var(--rose) / 0.07)")}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(248,113,113,0.07)")}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <div className="flex h-6 w-6 items-center justify-center rounded-md group-hover:bg-rose-500/10 shrink-0 transition-all duration-200">
@@ -158,13 +157,13 @@ export function Sidebar({ userEmail }: SidebarProps) {
       <div className="px-3 pb-3">
         <div
           className="flex items-center gap-3 rounded-xl px-3 py-2.5 border border-border/50 transition-all duration-200 hover:border-border-bright/60"
-          style={{ background: "hsl(var(--surface-elevated) / 0.55)" }}
+          style={{ background: "color-mix(in srgb, var(--elevated) 55%, transparent)" }}
         >
           {/* Gradient avatar */}
           <div className="relative shrink-0">
             <div
               className="h-8 w-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white"
-              style={{ background: "linear-gradient(135deg, hsl(var(--indigo)), hsl(var(--violet)))" }}
+              style={{ background: "linear-gradient(135deg, var(--primary), var(--accent))" }}
             >
               {initials}
             </div>
@@ -172,8 +171,8 @@ export function Sidebar({ userEmail }: SidebarProps) {
             <span
               className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2"
               style={{
-                background: "hsl(var(--emerald))",
-                borderColor: "hsl(var(--bg))",
+                background: "var(--success)",
+                borderColor: "var(--bg)",
               }}
             />
           </div>

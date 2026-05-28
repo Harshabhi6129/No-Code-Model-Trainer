@@ -44,7 +44,7 @@ function RunRow({ run, index }: { run: Run; index: number }) {
       {/* Left accent bar on hover */}
       <div
         className="absolute left-0 top-4 bottom-4 w-0.5 rounded-r opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-        style={{ background: "linear-gradient(180deg, hsl(var(--indigo)), hsl(var(--violet)))" }}
+        style={{ background: "linear-gradient(180deg, var(--primary), var(--accent))" }}
       />
 
       {/* Status icon */}
@@ -53,7 +53,7 @@ function RunRow({ run, index }: { run: Run; index: number }) {
         {run.status === "running" && (
           <span
             className="ping-dot absolute inset-[-3px] rounded-full"
-            style={{ color: "hsl(var(--cyan))" }}
+            style={{ color: "var(--cyan)" }}
           />
         )}
       </div>
@@ -111,7 +111,7 @@ const quickStart = [
     icon: FlaskConical,
     iconClass: "text-indigo-400",
     iconBg: "bg-indigo-500/10",
-    glowColor: "hsl(var(--indigo) / 0.18)",
+    glowColor: "var(--primary-15)",
     title: "Text Classification",
     description: "Classify support tickets, reviews, or any text by category using LoRA fine-tuning.",
     tag: "Most popular",
@@ -121,7 +121,7 @@ const quickStart = [
     icon: Database,
     iconClass: "text-violet-400",
     iconBg: "bg-violet-500/10",
-    glowColor: "hsl(var(--violet) / 0.16)",
+    glowColor: "color-mix(in srgb, var(--accent) 16%, transparent)",
     title: "NER · Entity Extraction",
     description: "Extract people, places, and products from unstructured text with token classification.",
     tag: "v0.2",
@@ -131,7 +131,7 @@ const quickStart = [
     icon: Sparkles,
     iconClass: "text-cyan-400",
     iconBg: "bg-cyan-500/10",
-    glowColor: "hsl(var(--cyan) / 0.14)",
+    glowColor: "color-mix(in srgb, var(--cyan) 14%, transparent)",
     title: "LLM Fine-Tuning",
     description: "Teach Llama, Mistral, or Qwen your domain knowledge using QLoRA on 4-bit weights.",
     tag: "QLoRA",
@@ -266,14 +266,14 @@ export default async function DashboardPage() {
 
           <div
             className="rounded-xl border border-border overflow-hidden"
-            style={{ background: "hsl(var(--surface) / 0.6)" }}
+            style={{ background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}
           >
             {allRuns.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 gap-5 text-center px-8">
                 <div
                   className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border"
                   style={{
-                    background: "linear-gradient(135deg, hsl(var(--indigo) / 0.1), hsl(var(--violet) / 0.06))",
+                    background: "linear-gradient(135deg, var(--primary-10), color-mix(in srgb, var(--accent) 6%, transparent))",
                   }}
                 >
                   <Zap className="h-7 w-7 text-indigo-400" />
@@ -311,7 +311,7 @@ export default async function DashboardPage() {
                   key={c.title}
                   href="/train"
                   className="group relative flex flex-col gap-4 p-5 rounded-xl border border-border overflow-hidden transition-all duration-300 hover:border-border-bright"
-                  style={{ background: "hsl(var(--surface) / 0.7)" }}
+                  style={{ background: "color-mix(in srgb, var(--surface) 70%, transparent)" }}
                 >
                   {/* Corner glow */}
                   <div
