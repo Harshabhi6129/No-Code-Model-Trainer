@@ -1,77 +1,323 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════════════════
+   MODELFORGE DESIGN SYSTEM — Neural Dark × Claude Design Synthesis
+   ═══════════════════════════════════════════════════════════════════════
+   Exact canonical colors from the Claude Design spec (#0D1117, #111827…)
+   + Neural Dark's grain texture, frosted glass sidebar, spectrum glows,
+     glow-breathe animations, and lab-grid background.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─── Raw design tokens ──────────────────────────────────────────────── */
+:root {
+  /* Surfaces — Claude Design canonical hex values */
+  --bg:          #0D1117;
+  --surface:     #111827;
+  --elevated:    #1A2233;
+  --elevated-2:  #222C3D;
+  --border-c:    #1E2A3B;
+  --border-soft: #19222F;
+
+  /* Primary — indigo with color-mix() variant system */
+  --primary:         #6366F1;
+  --primary-hover:   color-mix(in srgb, var(--primary) 86%, #000);
+  --primary-light:   color-mix(in srgb, var(--primary) 72%, #fff);
+  --primary-lighter: color-mix(in srgb, var(--primary) 46%, #fff);
+  --primary-05:      color-mix(in srgb, var(--primary)  6%, transparent);
+  --primary-10:      color-mix(in srgb, var(--primary) 12%, transparent);
+  --primary-15:      color-mix(in srgb, var(--primary) 17%, transparent);
+  --primary-30:      color-mix(in srgb, var(--primary) 30%, transparent);
+  --primary-50:      color-mix(in srgb, var(--primary) 50%, transparent);
+
+  /* Accent — purple */
+  --accent:     #9B59D9;
+  --accent-dim: color-mix(in srgb, var(--accent) 12%, transparent);
+
+  /* Spectrum — each hue owns a semantic domain */
+  --success:  #34D399;   /* completed / emerald */
+  --running:  #60A5FA;   /* live / sky-blue     */
+  --pending:  #FBBF24;   /* queued / amber       */
+  --error:    #F87171;   /* failed / rose        */
+  --violet:   #9B59D9;   /* AI / model features  */
+  --cyan:     #38BDF8;   /* streaming / live     */
+
+  /* Text hierarchy */
+  --muted:   #6B7280;
+  --body:    #E2E8F0;
+  --heading: #F8FAFC;
+
+  /* Radius system */
+  --radius-card:  10px;
+  --radius-btn:   8px;
+  --radius-badge: 6px;
+  --radius-chip:  4px;
+}
+
+/* ─── Tailwind theme mapping ─────────────────────────────────────────── */
 @theme inline {
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
+  /* Surfaces */
+  --color-background:             var(--bg);
+  --color-surface:                var(--surface);
+  --color-surface-elevated:       var(--elevated);
+  --color-surface-high:           var(--elevated-2);
+
+  /* Card / Popover */
+  --color-card:                   var(--surface);
+  --color-card-foreground:        var(--heading);
+  --color-popover:                var(--elevated);
+  --color-popover-foreground:     var(--heading);
+
+  /* Text */
+  --color-foreground:             var(--body);
+  --color-muted-foreground:       var(--muted);
+
+  /* Brand */
+  --color-primary:                var(--primary);
+  --color-primary-foreground:     #ffffff;
+
+  /* shadcn compat aliases */
+  --color-secondary:              var(--elevated);
+  --color-secondary-foreground:   var(--body);
+  --color-muted:                  var(--elevated);
+  --color-accent:                 var(--accent);
+  --color-accent-foreground:      #ffffff;
+  --color-destructive:            var(--error);
+  --color-destructive-foreground: #ffffff;
+
+  /* Borders */
+  --color-border:                 var(--border-c);
+  --color-border-bright:          var(--elevated-2);
+  --color-input:                  var(--elevated);
+  --color-ring:                   var(--primary);
+
+  /* Spectrum utilities */
+  --color-emerald:  var(--success);
+  --color-violet:   var(--violet);
+  --color-cyan:     var(--cyan);
+  --color-amber:    var(--pending);
+  --color-rose:     var(--error);
+
+  /* Fonts */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --radius: 0.625rem;
+
+  /* Radius */
+  --radius: var(--radius-btn);
 }
 
-:root {
-  --background: 224 25% 6%;
-  --foreground: 213 31% 91%;
-  --card: 224 20% 9%;
-  --card-foreground: 213 31% 91%;
-  --popover: 224 20% 9%;
-  --popover-foreground: 213 31% 91%;
-  --primary: 245 58% 63%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 224 18% 14%;
-  --secondary-foreground: 213 31% 91%;
-  --muted: 224 18% 14%;
-  --muted-foreground: 215 16% 55%;
-  --accent: 267 50% 58%;
-  --accent-foreground: 0 0% 100%;
-  --destructive: 0 72% 58%;
-  --destructive-foreground: 0 0% 100%;
-  --border: 224 18% 14%;
-  --input: 224 18% 14%;
-  --ring: 245 58% 63%;
+/* ─── Keyframes ──────────────────────────────────────────────────────── */
+
+/* Claude Design */
+@keyframes growBar {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(20px) scale(.98); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: .45; transform: scale(.82); }
 }
 
-* { border-color: hsl(var(--border)); box-sizing: border-box; }
+/* Neural Dark */
+@keyframes status-ping {
+  75%, 100% { transform: scale(1.9); opacity: 0; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes neural-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%       { opacity: 1;   transform: scale(1.12); }
+}
+@keyframes glow-breathe {
+  0%, 100% { box-shadow: 0 0 12px -2px color-mix(in srgb, var(--primary) 30%, transparent); }
+  50%       { box-shadow: 0 0 28px  2px color-mix(in srgb, var(--primary) 60%, transparent); }
+}
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(4px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ring-fill {
+  from { stroke-dashoffset: var(--ring-empty, 190); }
+  to   { stroke-dashoffset: var(--ring-offset, 0); }
+}
+
+/* ─── Base ───────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  border-color: var(--border-c);
+  box-sizing: border-box;
+}
+
+html { color-scheme: dark; }
 
 body {
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: var(--font-geist-sans, Arial, sans-serif);
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--font-geist-sans, system-ui, sans-serif);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.gradient-text {
-  background: linear-gradient(135deg, hsl(245 58% 72%), hsl(267 50% 68%));
+input, textarea, select, button { font-family: inherit; font-size: inherit; }
+button { cursor: pointer; }
+::selection { background: var(--primary-30); }
+::placeholder { color: #4b5565; }
+
+/* ─── Laboratory grid background ────────────────────────────────────── */
+.bg-grid {
+  background-image:
+    linear-gradient(var(--border-c) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-c) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* ─── Noise grain — tactile surface texture ──────────────────────────── */
+.grain::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  opacity: 0.025;
+  pointer-events: none;
+  z-index: 9998;
+}
+
+/* ─── Spectrum glow system ───────────────────────────────────────────── */
+.glow-indigo  { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--primary) 45%, transparent); }
+.glow-violet  { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--accent)  45%, transparent); }
+.glow-emerald { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--success) 45%, transparent); }
+.glow-amber   { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--pending) 45%, transparent); }
+.glow-rose    { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--error)   45%, transparent); }
+
+/* ─── Text gradients ─────────────────────────────────────────────────── */
+.text-gradient {
+  background: linear-gradient(135deg, var(--primary), var(--accent));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.hero-glow {
-  background: radial-gradient(ellipse 80% 50% at 50% -10%, hsl(245 58% 63% / 0.15), transparent);
+/* ─── Sidebar active nav item ────────────────────────────────────────── */
+.nav-active {
+  position: relative;
+  background: var(--primary-10);
+  color: var(--heading) !important;
+}
+.nav-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 56%;
+  background: linear-gradient(180deg, transparent, var(--primary), var(--accent), transparent);
+  border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 12px 2px color-mix(in srgb, var(--primary) 65%, transparent);
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: hsl(var(--background)); }
-::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+/* ─── Scrollbar ──────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #1f2a3a;
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: #2a3850; }
 
+/* ─── Utility animations ─────────────────────────────────────────────── */
+.animate-slide-up     { animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-fade-in      { animation: fade-in 0.3s ease-out both; }
+.animate-fade-up      { animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-neural-pulse { animation: neural-pulse 3s ease-in-out infinite; }
+.animate-glow-breathe { animation: glow-breathe 2.5s ease-in-out infinite; }
+.animate-count-up     { animation: count-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-spin         { animation: spin 0.8s linear infinite; }
+.spin                 { animation: spin 0.8s linear infinite; }
+
+/* ─── Status ping dot (running indicator) ────────────────────────────── */
+.ping-dot {
+  position: relative;
+  display: inline-flex;
+}
+.ping-dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: status-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* ─── Skeleton shimmer ───────────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, var(--elevated) 0px, var(--elevated-2) 200px, var(--elevated) 400px);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 6px;
+}
+
+/* ─── Metric grow-bar animation ──────────────────────────────────────── */
+.bar-fill {
+  transform-origin: left;
+  animation: growBar 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─── Recharts overrides ─────────────────────────────────────────────── */
 .recharts-cartesian-grid-horizontal line,
-.recharts-cartesian-grid-vertical line { stroke: hsl(var(--border)); }
-.recharts-text { fill: hsl(var(--muted-foreground)); font-size: 12px; }
+.recharts-cartesian-grid-vertical line { stroke: var(--border-c); }
+.recharts-text {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-geist-mono, monospace);
+  letter-spacing: 0.02em;
+}
+
+/* ─── Claude Design prose utilities ─────────────────────────────────── */
+.mono { font-family: var(--font-geist-mono, 'SF Mono', ui-monospace, monospace); }
+.scroll-y { overflow-y: auto; overflow-x: hidden; }
+
+/* ─── Gradient border (card edge accent) ────────────────────────────── */
+.border-gradient-primary {
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  position: relative;
+}
+.border-gradient-primary::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--primary) 40%, transparent),
+    color-mix(in srgb, var(--accent) 20%, transparent)
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: destination-out;
+  mask-composite: exclude;
+  pointer-events: none;
+}
