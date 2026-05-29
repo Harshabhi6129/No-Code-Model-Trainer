@@ -51,6 +51,10 @@ For datasets < 200 samples:
 - training_approach = "full_finetune" on < 500 samples: overfitting risk
 - final_train_loss very low but F1 low: possible overfitting
 - warnings from training: incorporate them into concerns/next_steps
+- label_noise_estimate >= 0.05: mention that 5%+ of labels may be wrong
+  and that the reported metrics are therefore a lower bound on true model quality
+- label_noise_estimate >= 0.20: flag prominently — high noise severely limits
+  how well any model can learn from this dataset regardless of architecture
 
 === NEXT STEPS ===
 Be specific — mention actual actions (e.g., "add 50 more examples for class 'X'",
@@ -80,13 +84,16 @@ def _build_prompt(context: AgentContext) -> str:
     return json.dumps({
         "task_type":          spec.get("task_type", "text_classification"),
         "dataset": {
-            "total_samples":   (tr.get("train_samples", 0) + tr.get("eval_samples", 0)),
-            "train_samples":   tr.get("train_samples", 0),
-            "eval_samples":    tr.get("eval_samples", 0),
-            "num_classes":     tr.get("num_labels", len(label_names)),
-            "label_names":     label_names,
-            "label_distribution": label_distribution,
-            "dataset_issues":  issues,
+            "total_samples":        (tr.get("train_samples", 0) + tr.get("eval_samples", 0)),
+            "train_samples":        tr.get("train_samples", 0),
+            "eval_samples":         tr.get("eval_samples", 0),
+            "num_classes":          tr.get("num_labels", len(label_names)),
+            "label_names":          label_names,
+            "label_distribution":   label_distribution,
+            "dataset_issues":       issues,
+            # B2: label noise estimate from cleanlab — affects grade calibration
+            "label_noise_estimate": profile.get("label_noise_estimate", 0.0),
+            "label_noise_count":    profile.get("label_noise_count", 0),
         },
         "model": {
             "base_model":         tr.get("base_model", "unknown"),
