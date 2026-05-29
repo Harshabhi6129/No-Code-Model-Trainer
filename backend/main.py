@@ -293,6 +293,8 @@ class ChatRequest(BaseModel):
     run_id: str | None = None
     hyperparameter_overrides: dict[str, Any] = {}
     hf_token: str | None = None
+    # A3: set to a previous run_id to resume from its last checkpoint
+    resume_from_run_id: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -313,33 +315,55 @@ def _resolve_file_id(file_id: str | None) -> str | None:
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> StreamingResponse:
-    """Stream agent responses as Server-Sent Events."""
-    dataset_path = _resolve_file_id(req.file_id)
+    """
+    Stream agent responses as Server-Sent Events.
 
+    Pass resume_from_run_id to continue a pipeline that failed mid-way —
+    completed stages (Intent, Data, Clean, Model) are restored from the
+    checkpoint and skipped, so only the remaining stages execute.
+    """
+    dataset_path = _resolve_file_id(req.file_id)
     _agents_import()
 
     async def event_stream():
         try:
             from agents.pipeline import TrainingPipeline
-            from services.run_event_writer import write_agent_event
+            from services.run_event_writer import (
+                write_agent_event,
+                write_pipeline_checkpoint,
+                load_pipeline_checkpoint,
+            )
+
+            # A3: load checkpoint when resuming
+            initial_context: dict | None = None
+            if req.resume_from_run_id:
+                initial_context = await load_pipeline_checkpoint(req.resume_from_run_id)
+                if initial_context:
+                    logger.info(
+                        "Resuming run %s from checkpoint (completed: %s)",
+                        req.resume_from_run_id,
+                        initial_context.get("completed_stages", []),
+                    )
 
             pipeline = TrainingPipeline()
-            async for result in pipeline.run_streaming(
+            async for result, context in pipeline.run_streaming(
                 user_intent=req.message,
                 dataset_path=dataset_path,
                 hyperparameter_overrides=req.hyperparameter_overrides,
                 hf_token=req.hf_token,
+                run_id=req.run_id,
+                initial_context=initial_context,
             ):
                 data = json.dumps({
-                    "agent": result.agent_name,
+                    "agent":   result.agent_name,
                     "success": result.success,
                     "message": result.message,
-                    "output": result.output,
+                    "output":  result.output,
                 })
                 yield f"data: {data}\n\n"
 
-                # Persist agent events to DB when run_id is provided
-                if req.run_id and result.output.get("final", True):
+                if req.run_id:
+                    # Always persist the agent event
                     await write_agent_event(
                         run_id=req.run_id,
                         agent_name=result.agent_name,
@@ -347,12 +371,25 @@ async def chat(req: ChatRequest) -> StreamingResponse:
                         message=result.message,
                         output=result.output,
                     )
+                    # A3: after each successful stage, checkpoint the full context
+                    # so a resume can skip already-completed work
+                    if result.success:
+                        await write_pipeline_checkpoint(
+                            run_id=req.run_id,
+                            completed_stages=list(context.completed_stages),
+                            checkpoint_data=pipeline.context_snapshot(context),
+                        )
 
                 if not result.success:
                     break
+
         except Exception as exc:
             logger.error("Agent pipeline error: %s", exc, exc_info=True)
-            yield f"data: {json.dumps({'agent': 'System', 'success': False, 'message': 'An internal error occurred. Please try again.', 'output': {}})}\n\n"
+            err_payload = json.dumps({
+                "agent": "System", "success": False,
+                "message": "An internal error occurred. Please try again.", "output": {},
+            })
+            yield f"data: {err_payload}\n\n"
         finally:
             yield "data: [DONE]\n\n"
 

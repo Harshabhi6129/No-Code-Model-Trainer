@@ -102,3 +102,74 @@ async def write_metric_event(run_id: str, epoch: int, metrics: dict[str, Any]) -
         "epoch": epoch,
         **metrics,
     })
+
+
+async def write_pipeline_checkpoint(
+    run_id: str,
+    completed_stages: list[str],
+    checkpoint_data: dict[str, Any],
+) -> bool:
+    """
+    Persist an AgentContext snapshot to the runs table after each stage.
+    Uses a targeted PATCH so we only update the two checkpoint columns —
+    other run fields (status, metrics, etc.) are untouched.
+
+    Fails silently if Supabase is not configured — the pipeline continues.
+    """
+    client = _get_client()
+    if client is None:
+        return False
+
+    # Sanitize: only keep JSON-serialisable values
+    import json
+    safe: dict[str, Any] = {}
+    for k, v in checkpoint_data.items():
+        try:
+            json.dumps(v)
+            safe[k] = v
+        except (TypeError, ValueError):
+            safe[k] = str(v)
+
+    try:
+        await asyncio.to_thread(
+            lambda: client.table("runs").update({
+                "completed_stages":    completed_stages,
+                "pipeline_checkpoint": safe,
+            }).eq("id", run_id).execute()
+        )
+        return True
+    except Exception as exc:
+        logger.warning("write_pipeline_checkpoint failed for run %s: %s", run_id, exc)
+        return False
+
+
+async def load_pipeline_checkpoint(run_id: str) -> dict[str, Any] | None:
+    """
+    Load a previously saved AgentContext snapshot from the runs table.
+    Returns None if the run doesn't exist, has no checkpoint, or Supabase
+    is unavailable — callers treat None as "start fresh".
+    """
+    client = _get_client()
+    if client is None:
+        return None
+
+    try:
+        resp = await asyncio.to_thread(
+            lambda: client.table("runs")
+            .select("pipeline_checkpoint,completed_stages")
+            .eq("id", run_id)
+            .single()
+            .execute()
+        )
+        row = resp.data
+        if not row:
+            return None
+        checkpoint = row.get("pipeline_checkpoint") or {}
+        stages     = row.get("completed_stages") or []
+        if not checkpoint and not stages:
+            return None
+        checkpoint["completed_stages"] = stages
+        return checkpoint
+    except Exception as exc:
+        logger.warning("load_pipeline_checkpoint failed for run %s: %s", run_id, exc)
+        return None
