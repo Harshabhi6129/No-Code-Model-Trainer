@@ -647,14 +647,19 @@ def _blocking_train(
     except RuntimeError as exc:
         msg = str(exc).lower()
         if "out of memory" in msg:
-            # OOM: reduce batch size and retry once
+            # OOM recovery — two-stage fallback:
+            # Stage 1: halve batch size + enable gradient checkpointing (halves VRAM)
             reduced = max(1, batch_size // 2)
             accumulated_warnings.append(
-                f"GPU OOM at batch_size={batch_size} — retrying with batch_size={reduced}."
+                f"GPU OOM at batch_size={batch_size} — retrying with "
+                f"batch_size={reduced} + gradient_checkpointing=True."
             )
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            # Rebuild trainer with smaller batch
+            # Enable gradient checkpointing on the model if the method exists
+            if hasattr(model, "gradient_checkpointing_enable"):
+                model.gradient_checkpointing_enable()
+
             training_args_retry = TrainingArguments(
                 output_dir=str(output_dir / "checkpoints"),
                 num_train_epochs=num_epochs,
@@ -675,6 +680,7 @@ def _blocking_train(
                 no_cuda=no_cuda,
                 fp16=use_fp16,
                 bf16=use_bf16,
+                gradient_checkpointing=True,   # ← recompute activations; halves VRAM
                 seed=42,
                 data_seed=42,
                 disable_tqdm=True,
@@ -686,9 +692,26 @@ def _blocking_train(
                 eval_dataset=test_ds,
                 tokenizer=tokenizer,
                 data_collator=collator,
-                callbacks=[DivergenceCallback(), *epoch_cbs, *cancel_cbs, *pause_cbs],
+                callbacks=[
+                    DivergenceCallback(),
+                    EarlyStoppingCallback(early_stopping_patience=2),  # ← restored
+                    *epoch_cbs, *cancel_cbs, *pause_cbs,
+                ],
             )
-            train_output = trainer_retry.train()
+            try:
+                train_output = trainer_retry.train()
+            except RuntimeError as exc2:
+                msg2 = str(exc2).lower()
+                if "out of memory" in msg2:
+                    # Stage 2: model itself is too large for this GPU even with all mitigations.
+                    # Provide a clear, actionable error rather than a raw CUDA stack trace.
+                    raise RuntimeError(
+                        f"GPU ran out of memory even after reducing batch_size to {reduced} "
+                        "and enabling gradient checkpointing. "
+                        "Try switching the training approach to 'qlora' (4-bit), "
+                        "or use a smaller base model."
+                    ) from exc2
+                raise
             if cancel_event is not None and cancel_event.is_set():
                 raise TrainingCancelledError("Training was cancelled by the user.")
             trainer = trainer_retry
