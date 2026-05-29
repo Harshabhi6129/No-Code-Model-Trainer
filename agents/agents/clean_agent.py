@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from .base import BaseAgent, AgentContext, AgentResult
+from .schemas import CleanResult
 
 logger = logging.getLogger(__name__)
 
 
 class CleanAgent(BaseAgent):
     name = "Clean"
+    # Fully deterministic — no LLM calls
 
     async def run(self, context: AgentContext) -> AgentResult:
         if not context.dataset_path:
@@ -68,13 +70,16 @@ class CleanAgent(BaseAgent):
         else:
             cleaned_path = path
 
-        output: dict[str, Any] = {
-            "original_rows": original_count,
-            "cleaned_rows":  cleaned_count,
-            "removed_nulls": removed_nulls,
-            "removed_dups":  removed_dups,
-            "cleaned_path":  str(cleaned_path),
-        }
+        # Validate through CleanResult — catches any unexpected field types
+        result = CleanResult(
+            original_rows=original_count,
+            cleaned_rows=cleaned_count,
+            removed_nulls=removed_nulls,
+            removed_dups=removed_dups,
+            cleaned_path=str(cleaned_path),
+            status="cleaned" if removed_total > 0 else "cleaned",
+        )
+        output = result.model_dump()
 
         parts = [f"Dataset cleaned: {original_count:,} → **{cleaned_count:,} rows**."]
         if removed_nulls:
