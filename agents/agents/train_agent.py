@@ -17,11 +17,14 @@ from typing import AsyncIterator, Any
 from .base import BaseAgent, AgentContext, AgentResult
 from .ml_core import (
     has_training_libs,
+    has_optuna,
     validate_training_inputs,
     train_model_async,
+    run_hpo_search,
     TrainingDivergedError,
     TrainingCancelledError,
 )
+from .schemas import HPOSearchSpace
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,73 @@ class TrainAgent(BaseAgent):
                 next_agent=None,
             )
             return
+
+        # ── HPO search (B1) — runs before full training when ModelAgent emitted a search space ──
+        # recipe["_hpo_mode"] is set by ModelAgent when dataset ≥ 200 rows and no user overrides.
+        # We run Optuna/TPE here (in the Train stage, where GPU access exists), then replace
+        # learning_rate and lora_r with the best found values before launching full training.
+        is_hpo_mode = recipe.get("_hpo_mode") and not ovr and has_training_libs() and has_optuna()
+        if is_hpo_mode:
+            hpo_cfg  = recipe.get("hpo_config", {})
+            lr_min   = float(hpo_cfg.get("lr_min", learning_rate * 0.5))
+            lr_max   = float(hpo_cfg.get("lr_max", learning_rate * 2.0))
+            r_choices = list(hpo_cfg.get("lora_r_choices", [8, 16]))
+            n_trials  = int(hpo_cfg.get("n_trials", 3))
+            ept       = int(hpo_cfg.get("epochs_per_trial", 1))
+
+            yield AgentResult(
+                agent_name=self.name, success=True,
+                output={"status": "hpo_search", "model_id": model_id, "final": False},
+                message=(
+                    f"Running hyperparameter search: {n_trials} trials × {ept} epoch.\n"
+                    f"Searching lr ∈ [{lr_min:.0e}, {lr_max:.0e}]"
+                    + (f", LoRA-r ∈ {r_choices}" if training_approach in ("lora", "qlora") else "")
+                    + "…"
+                ),
+                next_agent="Eval",
+            )
+
+            try:
+                best = await asyncio.to_thread(
+                    run_hpo_search,
+                    job_id=context.run_id,
+                    dataset_path=context.dataset_path or "",
+                    model_id=model_id,
+                    training_approach=training_approach,
+                    text_col=text_col,
+                    label_col=label_col,
+                    batch_size=batch_size,
+                    max_length=max_length,
+                    weight_decay=weight_decay,
+                    warmup_ratio=warmup_ratio,
+                    lr_min=lr_min,
+                    lr_max=lr_max,
+                    lora_r_choices=r_choices,
+                    n_trials=n_trials,
+                    epochs_per_trial=ept,
+                )
+                # Update live hyperparams with Optuna winner
+                learning_rate = float(best["learning_rate"])
+                if best.get("lora_r"):
+                    lora_r = int(best["lora_r"])
+                # Record HPO result in model_recipe for the eval report + UI
+                context.model_recipe["learning_rate"] = learning_rate
+                context.model_recipe["lora_r"]        = lora_r
+                context.model_recipe["hpo_best"]      = best
+
+                yield AgentResult(
+                    agent_name=self.name, success=True,
+                    output={"status": "hpo_done", "hpo_best": best, "final": False},
+                    message=(
+                        f"HPO complete — best: lr={learning_rate:.2e}"
+                        + (f", LoRA-r={lora_r}" if training_approach in ("lora", "qlora") else "")
+                        + f" (F1={best.get('hpo_best_f1', 0):.4f} over {best.get('hpo_n_trials_run', n_trials)} trials)."
+                    ),
+                    next_agent="Eval",
+                )
+            except Exception as exc:
+                logger.warning("[%s] HPO failed, using LLM recipe: %s", context.run_id, exc)
+                # HPO failed — gracefully fall through to full training with original recipe
 
         # ── Check ML libraries ────────────────────────────────────────────────
         if not has_training_libs():

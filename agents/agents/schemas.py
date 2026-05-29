@@ -14,8 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
-# ── 1. Intent ──────────────────────────────────────────────────────────────
+# ── Shared type aliases ────────────────────────────────────────────────────
 
 TaskType = Literal[
     "text_classification",
@@ -27,6 +26,10 @@ TaskType = Literal[
     "audio",
 ]
 
+TrainingApproach = Literal["full_finetune", "lora", "qlora", "embed_classify"]
+
+
+# ── 1. Intent ──────────────────────────────────────────────────────────────
 
 class TaskSpec(BaseModel):
     task_type: TaskType
@@ -83,10 +86,72 @@ class CleanResult(BaseModel):
     status: Literal["cleaned", "skipped"] = "cleaned"
 
 
-# ── 4. Model recipe ────────────────────────────────────────────────────────
+# ── 4a. HPO search space ───────────────────────────────────────────────────
+# Emitted by ModelAgent for large datasets (≥200 rows) instead of a fixed recipe.
+# TrainAgent runs Optuna/TPE within this space, then converts to a ModelRecipe.
 
-TrainingApproach = Literal["full_finetune", "lora", "qlora", "embed_classify"]
+class HPOConfig(BaseModel):
+    """The search space Claude defines; Optuna/TPE explores within it."""
+    lr_min:           float = Field(ge=1e-7, le=1e-2)
+    lr_max:           float = Field(ge=1e-7, le=1e-2)
+    lora_r_choices:   list[int] = Field(default_factory=lambda: [8, 16, 32])
+    n_trials:         int = Field(default=5, ge=2, le=10)
+    epochs_per_trial: int = Field(default=1, ge=1, le=3)
 
+    @model_validator(mode="after")
+    def lr_range_valid(self) -> HPOConfig:
+        if self.lr_min >= self.lr_max:
+            # Swap rather than fail — LLM occasionally inverts min/max
+            self.lr_min, self.lr_max = self.lr_max, self.lr_min
+        return self
+
+
+class HPOSearchSpace(BaseModel):
+    """
+    Emitted by ModelAgent when HPO is warranted (dataset ≥ 200 rows,
+    no user overrides, approach is gradient-based).
+
+    Fixed fields (batch_size, max_length, epochs) are determined by the
+    LLM from data priors. The hpo_config is what Optuna searches.
+    """
+    base_model:        str
+    training_approach: TrainingApproach = "lora"
+    hpo_config:        HPOConfig
+    batch_size:        int   = Field(default=16,  ge=1,   le=256)
+    max_length:        int   = Field(default=128, ge=16,  le=4096)
+    warmup_ratio:      float = Field(default=0.1, ge=0.0, le=0.5)
+    weight_decay:      float = Field(default=0.01, ge=0.0, le=0.5)
+    num_epochs:        int   = Field(default=3,   ge=1,   le=20)
+    reasoning:         str   = ""
+
+    @field_validator("base_model", mode="before")
+    @classmethod
+    def non_empty(cls, v: Any) -> Any:
+        if not v or not str(v).strip():
+            raise ValueError("base_model cannot be empty")
+        return str(v).strip()
+
+    def to_recipe(self, best_lr: float, best_lora_r: int | None) -> ModelRecipe:
+        """Convert search space + Optuna winner into a final ModelRecipe."""
+        is_lora    = self.training_approach in ("lora", "qlora")
+        lora_r     = best_lora_r if is_lora else None
+        lora_alpha = lora_r * 2  if lora_r  else None
+        return ModelRecipe(
+            base_model=self.base_model,
+            training_approach=self.training_approach,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+            learning_rate=best_lr,
+            num_epochs=self.num_epochs,
+            batch_size=self.batch_size,
+            max_length=self.max_length,
+            warmup_ratio=self.warmup_ratio,
+            weight_decay=self.weight_decay,
+            reasoning=self.reasoning,
+        )
+
+
+# ── 4b. Model recipe ───────────────────────────────────────────────────────
 
 class ModelRecipe(BaseModel):
     base_model: str
@@ -101,15 +166,17 @@ class ModelRecipe(BaseModel):
     warmup_ratio: float = Field(default=0.1, ge=0.0, le=0.5)
     weight_decay: float = Field(default=0.01, ge=0.0, le=0.5)
     reasoning: str = ""
+    # Populated after HPO search; None when HPO was not run
+    hpo_best: dict[str, Any] | None = None
 
     @model_validator(mode="after")
-    def fill_lora_defaults(self) -> "ModelRecipe":
+    def fill_lora_defaults(self) -> ModelRecipe:
         """Auto-fill LoRA fields rather than hard-failing — maximises pipeline completion."""
         if self.training_approach in ("lora", "qlora"):
             if self.lora_r is None:
-                self.lora_r = 16  # research-backed sweet spot
+                self.lora_r = 16
             if self.lora_alpha is None:
-                self.lora_alpha = self.lora_r * 2  # standard: alpha = 2r
+                self.lora_alpha = self.lora_r * 2
         return self
 
     @field_validator("base_model", mode="before")
@@ -122,24 +189,17 @@ class ModelRecipe(BaseModel):
     @field_validator("learning_rate")
     @classmethod
     def sane_lr(cls, v: float) -> float:
-        # Values outside this range are almost certainly hallucinations
         if not (1e-7 <= v <= 1e-2):
             raise ValueError(
-                f"learning_rate {v:.2e} is outside safe range [1e-7, 1e-2] — "
-                "this is likely a hallucination"
+                f"learning_rate {v:.2e} outside safe range [1e-7, 1e-2]"
             )
         return v
 
     @field_validator("batch_size")
     @classmethod
     def power_of_two_batch(cls, v: int) -> int:
-        # Clamp to nearest valid value rather than reject
-        valid = [1, 2, 4, 8, 16, 32, 64, 128, 256]
-        if v not in valid:
-            # Round to nearest power-of-two
-            closest = min(valid, key=lambda x: abs(x - v))
-            return closest
-        return v
+        valid   = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+        return v if v in valid else min(valid, key=lambda x: abs(x - v))
 
 
 # ── 5. Eval report ─────────────────────────────────────────────────────────
@@ -157,9 +217,7 @@ class EvalReport(BaseModel):
     @field_validator("summary", mode="before")
     @classmethod
     def non_empty_summary(cls, v: Any) -> Any:
-        if not v or not str(v).strip():
-            return "Evaluation completed."
-        return v
+        return v if (v and str(v).strip()) else "Evaluation completed."
 
     @field_validator("strengths", "concerns", "next_steps", mode="before")
     @classmethod

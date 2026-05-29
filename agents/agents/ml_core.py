@@ -841,3 +841,137 @@ async def train_model_async(
         cancel_event=cancel_event,
         pause_event=pause_event,
     )
+
+
+# ---------------------------------------------------------------------------
+# HPO — LLM warm-start + Optuna/TPE search  (Phase B1)
+# ---------------------------------------------------------------------------
+
+def has_optuna() -> bool:
+    """True when optuna is importable (lazy check — never raises)."""
+    try:
+        import optuna  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def run_hpo_search(
+    *,
+    job_id: str,
+    dataset_path: str,
+    model_id: str,
+    training_approach: str,
+    text_col: str,
+    label_col: str,
+    batch_size: int,
+    max_length: int,
+    weight_decay: float,
+    warmup_ratio: float,
+    lr_min: float,
+    lr_max: float,
+    lora_r_choices: list[int],
+    n_trials: int,
+    epochs_per_trial: int,
+) -> dict:
+    """
+    Blocking HPO search using Optuna/TPE sampler.
+
+    Runs `n_trials` short (1-epoch) training probes within the LLM-defined
+    search space, picks the best learning_rate and lora_r by eval F1, then
+    returns a dict suitable for merging into context.model_recipe.
+
+    Returns a minimal dict with keys: learning_rate, lora_r, lora_alpha,
+    hpo_n_trials_run, hpo_best_f1.  Falls back to midpoint defaults on any
+    failure — the pipeline never blocks on HPO errors.
+    """
+    if not has_optuna():
+        logger.warning("[%s] HPO: optuna not installed — using LR midpoint", job_id)
+        import math
+        mid_lr = math.exp((math.log(lr_min) + math.log(lr_max)) / 2)
+        default_r = lora_r_choices[len(lora_r_choices) // 2] if lora_r_choices else 16
+        return {"learning_rate": mid_lr, "lora_r": default_r, "lora_alpha": default_r * 2}
+
+    if not has_training_libs():
+        logger.warning("[%s] HPO: training libs not installed — using LR midpoint", job_id)
+        import math
+        mid_lr = math.exp((math.log(lr_min) + math.log(lr_max)) / 2)
+        default_r = lora_r_choices[len(lora_r_choices) // 2] if lora_r_choices else 16
+        return {"learning_rate": mid_lr, "lora_r": default_r, "lora_alpha": default_r * 2}
+
+    import optuna
+    import math
+
+    is_lora = training_approach in ("lora", "qlora")
+
+    # Suppress Optuna's verbose logging; we capture results ourselves
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    trial_results: list[dict] = []
+
+    def objective(trial: "optuna.Trial") -> float:
+        lr = trial.suggest_float("learning_rate", lr_min, lr_max, log=True)
+        lora_r = (
+            trial.suggest_categorical("lora_r", lora_r_choices)
+            if is_lora else None
+        )
+
+        try:
+            result = _blocking_train(
+                job_id=f"{job_id}_hpo_{trial.number}",
+                model_id=model_id,
+                dataset_path=dataset_path,
+                text_col=text_col,
+                label_col=label_col,
+                training_approach=training_approach,
+                learning_rate=lr,
+                num_epochs=epochs_per_trial,
+                batch_size=batch_size,
+                max_length=max_length,
+                weight_decay=weight_decay,
+                warmup_ratio=warmup_ratio,
+                lora_r=lora_r or 16,
+            )
+            f1 = result.metrics.get("f1", 0.0) or 0.0
+            trial_results.append({
+                "trial":          trial.number,
+                "learning_rate":  lr,
+                "lora_r":         lora_r,
+                "f1":             f1,
+            })
+            logger.info(
+                "[%s] HPO trial %d: lr=%.2e lora_r=%s → F1=%.4f",
+                job_id, trial.number, lr, lora_r, f1,
+            )
+            return f1
+        except (TrainingDivergedError, RuntimeError) as exc:
+            logger.warning("[%s] HPO trial %d failed: %s", job_id, trial.number, exc)
+            return 0.0
+
+    # TPE sampler: uses domain priors from early trials to guide later ones.
+    # This is the "warm-start" part — LLM-defined ranges seed the prior.
+    sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=2)
+    study   = optuna.create_study(direction="maximize", sampler=sampler)
+
+    # Hard cap: even if n_trials is high, stop at 5 minutes to avoid
+    # blocking the SSE stream for too long
+    study.optimize(objective, n_trials=n_trials, timeout=300)
+
+    best       = study.best_params
+    best_lr    = float(best.get("learning_rate", math.exp((math.log(lr_min) + math.log(lr_max)) / 2)))
+    best_lora_r = int(best.get("lora_r", lora_r_choices[len(lora_r_choices) // 2] if lora_r_choices else 16))
+    best_f1    = float(study.best_value)
+
+    logger.info(
+        "[%s] HPO complete: best lr=%.2e, lora_r=%d → F1=%.4f (%d trials)",
+        job_id, best_lr, best_lora_r, best_f1, len(trial_results),
+    )
+
+    return {
+        "learning_rate":    best_lr,
+        "lora_r":           best_lora_r if is_lora else None,
+        "lora_alpha":       best_lora_r * 2 if is_lora else None,
+        "hpo_n_trials_run": len(trial_results),
+        "hpo_best_f1":      best_f1,
+        "hpo_trial_log":    trial_results,
+    }
