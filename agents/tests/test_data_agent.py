@@ -35,7 +35,7 @@ async def test_data_agent_profiles_csv(csv_dataset: Path):
     result = await agent.run(ctx)
     assert result.success is True
     assert result.agent_name == "Data"
-    assert result.next_agent == "Model"
+    assert result.next_agent == "Clean"  # DataAgent now routes through CleanAgent
     assert ctx.data_profile["num_rows"] == 5
     assert ctx.data_profile["num_classes"] == 4
     assert "billing" in ctx.data_profile["label_distribution"]

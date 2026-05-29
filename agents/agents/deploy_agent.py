@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAgent, AgentContext, AgentResult
+from .base import BaseAgent, AgentContext, AgentResult, SONNET
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +299,8 @@ def _build_snippets(repo_id: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 class DeployAgent(BaseAgent):
-    name = "Deploy"
+    name  = "Deploy"
+    model = SONNET  # Model card generation requires quality prose narration
 
     async def run(self, context: AgentContext) -> AgentResult:
         tr = context.training_result

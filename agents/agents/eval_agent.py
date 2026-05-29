@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import logging
 
-from .base import BaseAgent, AgentContext, AgentResult
+from .base import BaseAgent, AgentContext, AgentResult, SONNET
+from .schemas import EvalReport
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,8 @@ def _build_prompt(context: AgentContext) -> str:
 
 
 class EvalAgent(BaseAgent):
-    name = "Eval"
+    name  = "Eval"
+    model = SONNET  # Needs contextual reasoning to interpret metrics + calibrate grade
 
     async def run(self, context: AgentContext) -> AgentResult:
         tr = context.training_result
@@ -145,25 +147,23 @@ class EvalAgent(BaseAgent):
                     "No training was executed — evaluation skipped.\n"
                     "Your model recipe is ready. Run locally with GPU support to train."
                 ),
-                next_agent=None,
+                next_agent="Deploy",
             )
 
         # ── Call Claude for calibrated evaluation ─────────────────────────────
+        # System prompt cached — grading rubric + concern patterns are ~800 tokens,
+        # repeated on every run. Cache hits cut cost significantly at scale.
         prompt = _build_prompt(context)
         try:
             raw = await self._chat(
                 system=SYSTEM,
                 messages=[{"role": "user", "content": prompt}],
+                cache_system=True,
             )
-            report = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("EvalAgent: could not parse Claude JSON, using fallback")
-            report = _fallback_report(tr)
+            eval_model, _ = self._parse_llm_json(raw, EvalReport)
+            report = eval_model.model_dump() if eval_model else _fallback_report(tr)
         except Exception as exc:
             logger.error("EvalAgent: Claude call failed: %s", exc, exc_info=True)
-            report = _fallback_report(tr)
-
-        if not isinstance(report, dict):
             report = _fallback_report(tr)
 
         # ── Merge raw metrics into output so Supabase gets everything ─────────
