@@ -70,8 +70,9 @@ class DataProfile(BaseModel):
     class_balance_ratio: float | None = None
     duplicate_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     missing_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    # Estimated fraction of mislabelled rows (populated by CleanAgent / cleanlab)
+    # Populated by CleanAgent via cleanlab Confident Learning (Phase B2)
     label_noise_estimate: float = Field(default=0.0, ge=0.0, le=1.0)
+    label_noise_count: int = Field(default=0, ge=0)   # absolute row count
     issues: list[str] = Field(default_factory=list)
 
 
