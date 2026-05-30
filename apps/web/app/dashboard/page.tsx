@@ -9,7 +9,7 @@ import { formatDistanceToNow } from "date-fns"
 import {
   Plus, Activity, CheckCircle2, Clock, XCircle, Zap, ArrowRight,
   BarChart3, Cpu, Sparkles, FlaskConical, TrendingUp, Database,
-  LayoutDashboard,
+  LayoutDashboard, DollarSign,
 } from "lucide-react"
 import type { Run } from "@/lib/supabase/types"
 
@@ -163,6 +163,32 @@ export default async function DashboardPage() {
       }, 0) / completed
     : 0
 
+  // Query pipeline_summary events to compute total API spend + cache hit ratio
+  const runIds = allRuns.map((r) => r.id)
+  let totalApiSpend = 0
+  let avgCacheRatio = 0
+  if (runIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: costEvents } = await (supabase as any)
+      .from("run_events")
+      .select("data")
+      .in("run_id", runIds)
+      .eq("event_type", "agent")
+
+    const summaries = ((costEvents ?? []) as { data: Record<string, unknown> }[])
+      .map((e) => e.data)
+      .filter((d) => d.agent === "pipeline" && (d.output as Record<string, unknown>)?.type === "pipeline_summary")
+      .map((d) => d.output as Record<string, unknown>)
+
+    if (summaries.length > 0) {
+      totalApiSpend = summaries.reduce((sum, s) => sum + (typeof s.total_cost_usd === "number" ? s.total_cost_usd : 0), 0)
+      avgCacheRatio = Math.round(
+        summaries.reduce((sum, s) => sum + (typeof s.overall_cache_hit_ratio === "number" ? s.overall_cache_hit_ratio * 100 : 0), 0) / summaries.length
+      )
+    }
+  }
+  const hasSpendData = totalApiSpend > 0
+
   const firstName = user?.email?.split("@")[0] ?? "there"
   const hour      = new Date().getHours()
   const greeting  = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
@@ -210,7 +236,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* ── Animated stat rings ─────────────────────────── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           <StatRing
             value={allRuns.length}
             label="Total Runs"
@@ -245,6 +271,15 @@ export default async function DashboardPage() {
             fillPercent={avgAcc * 100}
             sub={completed > 0 ? `over ${completed} run${completed !== 1 ? "s" : ""}` : "no data yet"}
             delay={240}
+          />
+          <StatRing
+            value={hasSpendData ? `$${totalApiSpend.toFixed(2)}` : "$—"}
+            label="API Spend"
+            icon={DollarSign}
+            color="amber"
+            fillPercent={hasSpendData ? Math.min((totalApiSpend / 5) * 100, 100) : 0}
+            sub={hasSpendData ? `${avgCacheRatio}% cache hits` : "no data yet"}
+            delay={320}
           />
         </div>
 

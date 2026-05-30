@@ -14,6 +14,7 @@ import {
   Database, BrainCircuit, Cpu, BarChart3, Rocket, FileText,
   Settings2, Play, ChevronRight, Plus, Clock, Zap,
   TrendingUp, Download, ArrowRight, Pencil, Check,
+  DollarSign, Sparkles, Info,
 } from "lucide-react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -88,6 +89,13 @@ interface RetrainPrefill {
   sourceRunId: string
 }
 
+interface PipelineCost {
+  totalCost: number
+  totalTokens: number
+  cacheRatio: number  // 0–100
+  elapsedS: number
+}
+
 interface TrainingSession {
   id: string
   label: string
@@ -105,6 +113,7 @@ interface TrainingSession {
   artifactPath: string | null
   errorMessage: string | null
   epochMetrics: EpochPoint[]
+  pipelineCost: PipelineCost | null
   // HITL: set when IntentAgent requests clarification (confidence < 0.7)
   clarificationQuestion: string | null
 }
@@ -202,9 +211,37 @@ function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession 
     artifactPath: null,
     errorMessage: null,
     epochMetrics: [],
+    pipelineCost: null,
     clarificationQuestion: null,
     ...overrides,
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Cost Strip — receipt-style summary shown on completed/failed session cards
+// ──────────────────────────────────────────────────────────────────────────────
+
+function CostStrip({ cost }: { cost: PipelineCost }) {
+  const zero = cost.totalCost === 0 && cost.totalTokens === 0
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1.5 border-t border-border/40">
+      <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+        <DollarSign className="h-2.5 w-2.5" />{zero ? "—" : `$${cost.totalCost.toFixed(4)}`}
+      </span>
+      <span className="text-[10px] text-muted-foreground/40">·</span>
+      <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+        <Zap className="h-2.5 w-2.5" />{zero ? "—" : `${cost.totalTokens.toLocaleString()} tok`}
+      </span>
+      <span className="text-[10px] text-muted-foreground/40">·</span>
+      <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+        <Sparkles className="h-2.5 w-2.5" />{cost.cacheRatio}% cache
+      </span>
+      <span className="text-[10px] text-muted-foreground/40">·</span>
+      <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+        <Clock className="h-2.5 w-2.5" />{cost.elapsedS}s
+      </span>
+    </div>
+  )
 }
 
 function reducer(state: WsState, action: Action): WsState {
@@ -280,6 +317,9 @@ function SessionSidebar({
               )}
               {!s.uploadResult && (
                 <p className="text-[10px] text-muted-foreground">No dataset</p>
+              )}
+              {(s.status === "completed" || s.status === "failed") && s.pipelineCost && (
+                <CostStrip cost={s.pipelineCost} />
               )}
             </button>
           )
@@ -499,6 +539,20 @@ function ConfigurePanel({
             {TASK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
         </div>
+        {/* NER format hint — shown when Named Entity Recognition task is selected */}
+        {hp.task_type === "ner" && (
+          <div className="flex overflow-hidden rounded-lg bg-primary/5 border border-primary/30">
+            <div className="w-0.5 shrink-0 bg-primary" />
+            <div className="p-2.5">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Info className="h-3.5 w-3.5 text-primary" />
+                <span className="text-[11px] font-bold text-foreground">NER Format Required</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">CSV must have a text column and a label column using BIO tags.</p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">Labels: <span className="font-mono text-muted-foreground/80">B-PER, I-PER, B-ORG, I-ORG, O</span> — one token per row, or space-separated sequence per row.</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <Separator />
@@ -915,11 +969,17 @@ function TrainingColumn({
                   <div key={i} className={`rounded-xl p-3 border text-xs ${
                     msg.success ? "bg-secondary/50 border-border" : "bg-destructive/5 border-destructive/30"
                   } ${isKeepalive ? "opacity-50" : ""}`}>
-                    <div className="flex items-center gap-2 mb-1.5">
+                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                       <div className={`h-5 w-5 flex items-center justify-center rounded-md ${msg.success ? "bg-primary/10" : "bg-destructive/10"}`}>
                         <AgentIcon className={`h-3 w-3 ${msg.success ? "text-primary" : "text-destructive"}`} />
                       </div>
                       <span className="font-medium">{msg.agent}</span>
+                      {/* Cache hit chip — shown when ModelAgent reused a memoized recipe */}
+                      {msg.agent === "Model" && msg.output.cache_hit === true && (
+                        <span className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 rounded px-1.5 py-0.5">
+                          <Zap className="h-2.5 w-2.5" /> Cached Recipe
+                        </span>
+                      )}
                       <span className="ml-auto">
                         {msg.success
                           ? <CheckCircle2 className="h-3 w-3 text-emerald-400" />
@@ -928,6 +988,28 @@ function TrainingColumn({
                       </span>
                     </div>
                     <p className="leading-relaxed text-muted-foreground pl-7 whitespace-pre-wrap">{msg.message}</p>
+                    {/* Semantic validation errors — structured list when ModelAgent rejects a recipe */}
+                    {!msg.success && Array.isArray(msg.output.validation_errors) && (msg.output.validation_errors as string[]).length > 0 && (
+                      <div className="mt-2 ml-7 rounded-lg bg-destructive/8 border border-destructive/25 p-2.5">
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <AlertTriangle className="h-3 w-3 text-destructive" />
+                          <span className="text-[11px] font-semibold text-destructive">Recipe Validation Failed</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {(msg.output.validation_errors as string[]).slice(0, 5).map((err, ei) => (
+                            <div key={ei} className="flex items-start gap-1.5">
+                              <XCircle className="h-3 w-3 text-destructive shrink-0 mt-0.5" />
+                              <span className="font-mono text-[11px] text-destructive/80 leading-tight">{err}</span>
+                            </div>
+                          ))}
+                          {(msg.output.validation_errors as string[]).length > 5 && (
+                            <span className="text-[11px] text-destructive pl-4">
+                              +{(msg.output.validation_errors as string[]).length - 5} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -1435,6 +1517,19 @@ export function TrainClient() {
           if (payload === "[DONE]") break
           try {
             const msg: AgentMessage = JSON.parse(payload)
+            // Pipeline summary — store cost metadata, not shown in message list
+            if (msg.agent === "pipeline" && msg.output.type === "pipeline_summary") {
+              updateSession(sessionId, {
+                pipelineCost: {
+                  totalCost:   typeof msg.output.total_cost_usd          === "number" ? msg.output.total_cost_usd          : 0,
+                  totalTokens: typeof msg.output.total_tokens            === "number" ? msg.output.total_tokens            : 0,
+                  cacheRatio:  typeof msg.output.overall_cache_hit_ratio === "number" ? Math.round(msg.output.overall_cache_hit_ratio * 100) : 0,
+                  elapsedS:    typeof msg.output.elapsed_seconds         === "number" ? Math.round(msg.output.elapsed_seconds)         : 0,
+                },
+              })
+              continue
+            }
+
             // Epoch progress events are streamed separately — not added to the message list
             if (msg.agent === "Train" && msg.output.status === "epoch") {
               const pt: EpochPoint = {

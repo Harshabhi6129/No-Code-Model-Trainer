@@ -9,7 +9,7 @@ import {
   Database, BrainCircuit, Cpu, BarChart3, Rocket,
   AlertTriangle, RefreshCw, FileText, Copy, Check,
   ChevronDown, ChevronUp, Zap, ExternalLink, Info,
-  Download,
+  Download, DollarSign, Sparkles,
 } from "lucide-react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -41,6 +41,25 @@ interface MetricPoint { name: string; value: number }
 interface InferScore { label: string; score: number; pct: number }
 interface InferResult { predicted_label: string; confidence: number; all_scores: InferScore[] }
 
+interface PerStageMetric {
+  stage: string
+  tokIn:   number
+  tokOut:  number
+  cost:    number
+  latency: number
+  cache:   number
+  empty:   boolean
+  note?:   string
+}
+
+interface PipelineSummary {
+  totalCost:   number
+  totalTokens: number
+  cacheRatio:  number  // 0–100
+  elapsedS:    number
+  perStage:    PerStageMetric[]
+}
+
 // ---------------------------------------------------------------------------
 // Status config
 // ---------------------------------------------------------------------------
@@ -64,6 +83,15 @@ const GRADE_CONFIG: Record<string, { ring: string; text: string; bg: string }> =
   D: { ring: "border-orange-500",  text: "text-orange-400",  bg: "bg-orange-500/10"  },
   F: { ring: "border-destructive", text: "text-destructive", bg: "bg-destructive/10" },
 }
+
+const DIFFICULTY_CONFIG: Record<string, { text: string; bg: string; border: string }> = {
+  easy:      { text: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/20" },
+  medium:    { text: "text-yellow-400",  bg: "bg-yellow-500/10",  border: "border-yellow-500/20"  },
+  hard:      { text: "text-orange-400",  bg: "bg-orange-500/10",  border: "border-orange-500/20"  },
+  very_hard: { text: "text-rose-400",    bg: "bg-rose-500/10",    border: "border-rose-500/20"    },
+}
+
+const AGENT_STAGE_ORDER = ["Intent", "Data", "Clean", "Model", "Train", "Eval", "Deploy"]
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -392,7 +420,15 @@ function ExportSection({ run }: { run: Run }) {
 // Eval Report Card
 // ---------------------------------------------------------------------------
 
-function EvalReportCard({ metrics }: { metrics: Record<string, unknown> }) {
+function EvalReportCard({
+  metrics,
+  difficultyTier,
+  gradeRationale,
+}: {
+  metrics: Record<string, unknown>
+  difficultyTier?: string | null
+  gradeRationale?: string | null
+}) {
   const grade = typeof metrics.evaluation_grade === "string" ? metrics.evaluation_grade : null
   const summary = typeof metrics.summary === "string" ? metrics.summary : null
   const strengths = asStrArray(metrics.strengths)
@@ -401,7 +437,9 @@ function EvalReportCard({ metrics }: { metrics: Record<string, unknown> }) {
 
   if (!grade && !summary) return null
 
-  const gc = GRADE_CONFIG[grade ?? ""] ?? GRADE_CONFIG["C"]
+  const gc   = GRADE_CONFIG[grade ?? ""] ?? GRADE_CONFIG["C"]
+  const diff = difficultyTier ? DIFFICULTY_CONFIG[difficultyTier] ?? null : null
+  const diffLabel = difficultyTier?.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase()) ?? null
 
   return (
     <Card>
@@ -411,14 +449,29 @@ function EvalReportCard({ metrics }: { metrics: Record<string, unknown> }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Grade + summary */}
+        {/* Grade + difficulty tier + summary */}
         <div className="flex items-start gap-4">
           {grade && (
-            <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border-2 font-bold text-2xl ${gc.ring} ${gc.text} ${gc.bg}`}>
-              {grade}
+            <div className="flex flex-col items-center gap-1.5 shrink-0">
+              <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border-2 font-bold text-2xl ${gc.ring} ${gc.text} ${gc.bg}`}>
+                {grade}
+              </div>
+              {diff && diffLabel && (
+                <span className={`font-mono text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${diff.text} ${diff.bg} ${diff.border}`}>
+                  {diffLabel}
+                </span>
+              )}
             </div>
           )}
-          {summary && <p className="text-sm text-muted-foreground leading-relaxed">{summary}</p>}
+          <div className="flex-1 min-w-0">
+            {summary && <p className="text-sm text-muted-foreground leading-relaxed">{summary}</p>}
+            {gradeRationale && (
+              <div className="flex gap-2 mt-2 max-w-lg">
+                <div className="w-0.5 shrink-0 rounded bg-primary" />
+                <span className="font-mono text-[11px] italic text-muted-foreground/70 leading-relaxed">{gradeRationale}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Strengths + Concerns */}
@@ -589,6 +642,114 @@ function extractSnippets(modelCard: string): { pipeline?: string; python?: strin
 }
 
 // ---------------------------------------------------------------------------
+// AI Pipeline Cost Panel
+// ---------------------------------------------------------------------------
+
+function CostPanel({ summary }: { summary: PipelineSummary }) {
+  const [open, setOpen] = useState(false)
+  const allZero = summary.totalCost === 0 && summary.totalTokens === 0
+  const summaryLine = allZero
+    ? "Local run · no API calls"
+    : `$${summary.totalCost.toFixed(4)} · ${summary.totalTokens.toLocaleString()} tokens · ${summary.cacheRatio}% cache`
+
+  const tiles = [
+    { label: "Total Cost",     value: allZero ? "$—" : `$${summary.totalCost.toFixed(4)}` },
+    { label: "Total Tokens",   value: allZero ? "—"  : summary.totalTokens.toLocaleString() },
+    { label: "Cache Hit",      value: `${summary.cacheRatio}%` },
+    { label: "Elapsed",        value: `${summary.elapsedS}s` },
+  ]
+
+  const cols = ["Stage", "Tokens In", "Tokens Out", "Est. Cost", "Latency", "Cache %"]
+
+  return (
+    <div className="space-y-3">
+      <Card>
+        <CardContent className="pt-5">
+          <div className="flex items-center gap-2.5">
+            <DollarSign className="h-4 w-4 text-primary shrink-0" />
+            <span className="text-sm font-semibold">AI Pipeline Cost</span>
+            {!open && (
+              <span className="font-mono text-[11px] text-muted-foreground">{summaryLine}</span>
+            )}
+            <button
+              onClick={() => setOpen(o => !o)}
+              className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={open ? "Collapse cost panel" : "Expand cost panel"}
+            >
+              {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {open && (
+            <div className="mt-5 space-y-5 animate-in fade-in slide-in-from-top-1 duration-200">
+              {allZero && (
+                <p className="text-xs text-muted-foreground">Local training run — no API calls recorded.</p>
+              )}
+
+              {/* 4 stat tiles */}
+              <div className="grid grid-cols-4 gap-3">
+                {tiles.map(t => (
+                  <div key={t.label} className="rounded-lg border border-border bg-secondary/30 px-3 py-2.5">
+                    <p className="text-[11px] text-muted-foreground mb-1">{t.label}</p>
+                    <p className="font-mono text-base font-semibold">{t.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Per-stage table */}
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Per-Stage Breakdown</p>
+                <div className="rounded-lg border border-border overflow-hidden">
+                  {/* Header */}
+                  <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr_1fr_0.8fr] px-3 py-2 bg-secondary/50">
+                    {cols.map((c, i) => (
+                      <span key={c} className={`text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 ${i > 0 ? "text-right" : ""}`}>
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                  {/* Rows */}
+                  {summary.perStage.map((s, i) => (
+                    <div
+                      key={s.stage}
+                      className={`grid grid-cols-[1.2fr_1fr_1fr_1fr_1fr_0.8fr] px-3 py-2.5 border-t border-border ${i % 2 === 0 ? "bg-secondary/20" : ""}`}
+                    >
+                      <span className={`flex items-center gap-1.5 text-xs ${s.empty ? "text-muted-foreground/40" : "text-foreground"}`}>
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" style={{ opacity: s.empty ? 0.2 : 0.7 }} />
+                        {s.stage}
+                      </span>
+                      {s.empty ? (
+                        <>
+                          <span />
+                          <span />
+                          <span className="font-mono text-[11px] text-muted-foreground/40 text-right">—</span>
+                          <span />
+                          <span />
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono text-[11px] text-muted-foreground text-right">{s.tokIn ? s.tokIn.toLocaleString() : "—"}</span>
+                          <span className="font-mono text-[11px] text-muted-foreground text-right">{s.tokOut ? s.tokOut.toLocaleString() : "—"}</span>
+                          <span className="font-mono text-[11px] text-foreground text-right">
+                            {s.note === "GPU" ? "GPU" : s.cost ? `$${s.cost.toFixed(4)}` : "—"}
+                          </span>
+                          <span className="font-mono text-[11px] text-muted-foreground text-right">{s.latency ? `${s.latency}ms` : "—"}</span>
+                          <span className="font-mono text-[11px] text-muted-foreground text-right">{(s.note === "GPU" || s.empty) ? "—" : `${s.cache}%`}</span>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Inference Playground
 // ---------------------------------------------------------------------------
 
@@ -717,6 +878,9 @@ function InferencePlayground({ run }: { run: Run }) {
 
 export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEvent[] }) {
   const [run, setRun] = useState<Run>(initialRun)
+  const [difficultyTier,  setDifficultyTier]  = useState<string | null>(null)
+  const [gradeRationale,  setGradeRationale]  = useState<string | null>(null)
+  const [pipelineSummary, setPipelineSummary] = useState<PipelineSummary | null>(null)
   const supabase = createClient()
 
   useEffect(() => {
@@ -726,6 +890,61 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
       if (data) setRun(data as Run)
     }, 3000)
     return () => clearInterval(iv)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.id, run.status])
+
+  // Extract difficulty tier, grade rationale, and pipeline cost from run_events
+  useEffect(() => {
+    async function loadEvents() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any)
+        .from("run_events")
+        .select("event_type, data")
+        .eq("run_id", run.id)
+        .eq("event_type", "agent")
+
+      if (!data) return
+      for (const ev of data as { event_type: string; data: Record<string, unknown> }[]) {
+        const d = ev.data ?? {}
+        // EvalAgent output — difficulty tier and grade rationale
+        if (d.agent === "Eval" && d.success) {
+          const out = d.output as Record<string, unknown> ?? {}
+          if (typeof out.difficulty_tier === "string")  setDifficultyTier(out.difficulty_tier)
+          if (typeof out.grade_rationale === "string")  setGradeRationale(out.grade_rationale)
+        }
+        // Pipeline summary — cost breakdown
+        if (d.agent === "pipeline") {
+          const out = d.output as Record<string, unknown> ?? {}
+          if (out.type === "pipeline_summary") {
+            const meta = d.metadata as Record<string, unknown> ?? {}
+            const rawStages = Array.isArray(meta.stage_metrics) ? meta.stage_metrics as Record<string, unknown>[] : []
+            const perStage: PerStageMetric[] = AGENT_STAGE_ORDER.map(stageName => {
+              const sm = rawStages.find(s => s.agent_name === stageName || s.stage === stageName)
+              if (!sm) return { stage: stageName, tokIn: 0, tokOut: 0, cost: 0, latency: 0, cache: 0, empty: true }
+              return {
+                stage:   stageName,
+                tokIn:   typeof sm.input_tokens       === "number" ? sm.input_tokens       : 0,
+                tokOut:  typeof sm.output_tokens      === "number" ? sm.output_tokens      : 0,
+                cost:    typeof sm.estimated_cost_usd === "number" ? sm.estimated_cost_usd : 0,
+                latency: typeof sm.latency_ms         === "number" ? Math.round(sm.latency_ms) : 0,
+                cache:   typeof sm.cache_hit_ratio    === "number" ? Math.round(sm.cache_hit_ratio * 100) : 0,
+                empty:   false,
+              }
+            })
+            setPipelineSummary({
+              totalCost:   typeof out.total_cost_usd          === "number" ? out.total_cost_usd          : 0,
+              totalTokens: typeof out.total_tokens            === "number" ? out.total_tokens            : 0,
+              cacheRatio:  typeof out.overall_cache_hit_ratio === "number" ? Math.round(out.overall_cache_hit_ratio * 100) : 0,
+              elapsedS:    typeof out.elapsed_seconds         === "number" ? Math.round(out.elapsed_seconds)         : 0,
+              perStage,
+            })
+          }
+        }
+      }
+    }
+    if (run.status === "completed" || run.status === "failed") {
+      loadEvents()
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.id, run.status])
 
@@ -843,7 +1062,7 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
       </div>
 
       {/* Eval Report Card */}
-      <EvalReportCard metrics={metricsObj} />
+      <EvalReportCard metrics={metricsObj} difficultyTier={difficultyTier} gradeRationale={gradeRationale} />
 
       {/* Metrics chart */}
       {hasMetrics && (
@@ -898,6 +1117,9 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
 
       {/* Export Section */}
       <ExportSection run={run} />
+
+      {/* AI Pipeline Cost Panel */}
+      {pipelineSummary && <CostPanel summary={pipelineSummary} />}
 
       {/* Inference Playground */}
       <InferencePlayground run={run} />
