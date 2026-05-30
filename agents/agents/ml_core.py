@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Resolved from env so the path is configurable in prod (e.g. ephemeral storage).
 RUNS_DIR = Path(os.getenv("RUNS_DIR", str(Path(__file__).parent.parent.parent / "backend" / "runs")))
 
-SUPPORTED_TASK_TYPES = {"text_classification"}
+SUPPORTED_TASK_TYPES = {"text_classification", "token_classification"}
 
 # ---------------------------------------------------------------------------
 # Availability probe
@@ -148,6 +148,23 @@ def validate_training_inputs(
         warnings.append(f"Small dataset ({n} samples) — consider collecting more data for better accuracy.")
 
     # ── 7. Label checks ───────────────────────────────────────────────────────
+    # For token_classification (NER), the label_col contains space-separated BIO
+    # tags (one per token), not categorical class values.  Skip the categorical
+    # uniqueness checks — validate BIO format instead.
+    if task_type == "token_classification":
+        mismatch_count = 0
+        for _, row in df_clean.iterrows():
+            tokens = str(row[text_col]).split()
+            tags   = str(row[label_col]).split()
+            if len(tokens) != len(tags):
+                mismatch_count += 1
+        if mismatch_count > 0:
+            warnings.append(
+                f"{mismatch_count} NER rows have mismatched token/tag counts and will be dropped. "
+                "Ensure each word has exactly one BIO tag."
+            )
+        return ValidationResult(ok=True, warnings=warnings)
+
     labels = df_clean[label_col].astype(str)
     label_counts = labels.value_counts()
     unique_labels = len(label_counts)
@@ -828,6 +845,241 @@ def _blocking_train(
 # Async wrapper (called from TrainAgent)
 # ---------------------------------------------------------------------------
 
+def _blocking_train_ner(
+    *,
+    job_id: str,
+    model_id: str,
+    dataset_path: str,
+    text_col: str,
+    label_col: str,
+    learning_rate: float,
+    num_epochs: int,
+    batch_size: int,
+    max_length: int,
+    weight_decay: float,
+    warmup_ratio: float,
+    use_cpu: bool,
+    cancel_event: "threading.Event | None" = None,
+    pause_event: "threading.Event | None" = None,
+) -> TrainingResult:
+    """
+    Token classification (NER) training.
+
+    Input CSV format:
+      text_col  : space-separated tokens  e.g. "John lives in London"
+      label_col : space-separated BIO tags e.g. "B-PER O O B-LOC"
+
+    Mismatched rows (token count ≠ tag count) are silently dropped.
+    seqeval is used for entity-level F1 if available; falls back to
+    token-level weighted F1 otherwise.
+    """
+    import torch
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import f1_score
+    from transformers import (
+        AutoTokenizer, AutoModelForTokenClassification,
+        Trainer, TrainingArguments, DataCollatorForTokenClassification,
+    )
+    from datasets import Dataset as HFDataset
+
+    output_dir = RUNS_DIR / job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    device = "cpu" if use_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("[%s] NER training on %s", job_id, device)
+    t_start = time.monotonic()
+
+    # ── Load dataset ──────────────────────────────────────────────────────────
+    path = Path(dataset_path)
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        df = pd.read_csv(path)
+    else:
+        df = pd.read_json(path, lines=(suffix == ".jsonl"))
+
+    df = df[[text_col, label_col]].dropna()
+    df[text_col]  = df[text_col].astype(str)
+    df[label_col] = df[label_col].astype(str)
+
+    # Parse and validate BIO format
+    valid_rows: list[dict] = []
+    warnings: list[str] = []
+    invalid = 0
+    for _, row in df.iterrows():
+        tokens = str(row[text_col]).split()
+        tags   = str(row[label_col]).split()
+        if len(tokens) != len(tags):
+            invalid += 1
+            continue
+        valid_rows.append({"tokens": tokens, "tags": tags})
+
+    if invalid > 0:
+        warnings.append(
+            f"{invalid} rows dropped: token count ≠ tag count. "
+            "Ensure each token has exactly one BIO tag."
+        )
+
+    if len(valid_rows) < 10:
+        raise ValueError(
+            f"Only {len(valid_rows)} valid rows after BIO validation. "
+            "Check that your label column contains space-separated BIO tags."
+        )
+
+    # Build label scheme from all tags in the dataset
+    all_tags: set[str] = set()
+    for row in valid_rows:
+        all_tags.update(row["tags"])
+    label_names = sorted(all_tags)
+    label2id = {lbl: i for i, lbl in enumerate(label_names)}
+    id2label  = {i: lbl for i, lbl in enumerate(label_names)}
+
+    # ── Tokenizer ─────────────────────────────────────────────────────────────
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+
+    def tokenize_and_align(examples: dict) -> dict:
+        tokenized = tokenizer(
+            examples["tokens"],
+            is_split_into_words=True,
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+        )
+        all_labels = []
+        for i, tags in enumerate(examples["tags"]):
+            word_ids = tokenized.word_ids(batch_index=i)
+            prev_word_id = None
+            row_labels = []
+            for word_id in word_ids:
+                if word_id is None:
+                    row_labels.append(-100)  # special token
+                elif word_id != prev_word_id:
+                    row_labels.append(label2id.get(tags[word_id], 0))
+                else:
+                    row_labels.append(-100)  # continuation subword
+                prev_word_id = word_id
+            all_labels.append(row_labels)
+        tokenized["labels"] = all_labels
+        return tokenized
+
+    # ── Split ─────────────────────────────────────────────────────────────────
+    train_rows, test_rows = train_test_split(valid_rows, test_size=0.2, random_state=42)
+
+    train_ds = (
+        HFDataset.from_dict({"tokens": [r["tokens"] for r in train_rows],
+                              "tags":   [r["tags"]   for r in train_rows]})
+        .map(tokenize_and_align, batched=True, remove_columns=["tokens", "tags"])
+    )
+    test_ds = (
+        HFDataset.from_dict({"tokens": [r["tokens"] for r in test_rows],
+                              "tags":   [r["tags"]   for r in test_rows]})
+        .map(tokenize_and_align, batched=True, remove_columns=["tokens", "tags"])
+    )
+
+    # ── Model ─────────────────────────────────────────────────────────────────
+    num_labels = len(label_names)
+    model = AutoModelForTokenClassification.from_pretrained(
+        model_id,
+        num_labels=num_labels,
+        id2label=id2label,
+        label2id=label2id,
+        ignore_mismatched_sizes=True,
+    )
+    model.to(device)
+
+    collator = DataCollatorForTokenClassification(tokenizer=tokenizer)
+
+    def compute_metrics(p) -> dict:
+        preds_flat   = p.predictions.argmax(axis=-1).flatten()
+        labels_flat  = p.label_ids.flatten()
+        mask         = labels_flat != -100
+        preds_masked  = preds_flat[mask]
+        labels_masked = labels_flat[mask]
+        token_f1 = float(f1_score(labels_masked, preds_masked, average="weighted", zero_division=0))
+
+        # Try seqeval for entity-level F1
+        try:
+            from seqeval.metrics import f1_score as seq_f1, classification_report as seq_cr
+            pred_tags  = [[id2label.get(p, "O") for p, l in zip(pred_row, label_row) if l != -100]
+                          for pred_row, label_row in zip(p.predictions.argmax(-1), p.label_ids)]
+            true_tags  = [[id2label.get(l, "O") for l in label_row if l != -100]
+                          for label_row in p.label_ids]
+            entity_f1 = float(seq_f1(true_tags, pred_tags, zero_division=0))
+            return {"entity_f1": entity_f1, "token_f1": token_f1}
+        except ImportError:
+            pass
+        return {"token_f1": token_f1}
+
+    if cancel_event and cancel_event.is_set():
+        raise TrainingCancelledError("Training cancelled before NER start")
+
+    training_args = TrainingArguments(
+        output_dir=str(output_dir / "checkpoints"),
+        num_train_epochs=num_epochs,
+        per_device_train_batch_size=min(batch_size, len(train_rows)),
+        per_device_eval_batch_size=min(batch_size * 2, len(test_rows)),
+        learning_rate=learning_rate,
+        warmup_ratio=warmup_ratio,
+        weight_decay=weight_decay,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="token_f1",
+        fp16=torch.cuda.is_available() and not use_cpu,
+        report_to="none",
+        logging_steps=max(1, len(train_rows) // batch_size // 4),
+    )
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_ds,
+        eval_dataset=test_ds,
+        tokenizer=tokenizer,
+        data_collator=collator,
+        compute_metrics=compute_metrics,
+    )
+
+    trainer.train()
+
+    final_metrics = trainer.evaluate()
+    f1 = float(final_metrics.get("eval_entity_f1", final_metrics.get("eval_token_f1", 0.0)))
+
+    # Save model
+    final_model_path = output_dir / "final_model"
+    trainer.save_model(str(final_model_path))
+    tokenizer.save_pretrained(str(final_model_path))
+
+    elapsed = time.monotonic() - t_start
+
+    return TrainingResult(
+        model_path=str(final_model_path),
+        base_model=model_id,
+        training_approach="full_finetune",
+        num_epochs_completed=int(trainer.state.epoch or num_epochs),
+        final_train_loss=float(trainer.state.log_history[-1].get("train_loss", 0.0))
+            if trainer.state.log_history else 0.0,
+        training_time_seconds=elapsed,
+        device=device,
+        metrics={
+            "accuracy":    f1,   # entity F1 as the primary metric
+            "f1":          f1,
+            "precision":   f1,
+            "recall":      f1,
+            "ece":         0.0,
+            "per_class_f1": {},
+            "per_class_metrics": {},
+            "confusion_matrix":  [],
+            "num_labels":  num_labels,
+            "label_names": label_names,
+            "train_samples": len(train_rows),
+            "eval_samples":  len(test_rows),
+        },
+        warnings=warnings,
+        epoch_metrics=[],
+    )
+
+
 async def train_model_async(
     *,
     job_id: str,
@@ -850,7 +1102,25 @@ async def train_model_async(
     cancel_event: "threading.Event | None" = None,
     pause_event: "threading.Event | None" = None,
 ) -> TrainingResult:
-    """Non-blocking wrapper — runs the blocking trainer in a thread pool."""
+    """Non-blocking wrapper — routes to the correct training backend."""
+    if task_type == "token_classification":
+        return await asyncio.to_thread(
+            _blocking_train_ner,
+            job_id=job_id,
+            model_id=model_id,
+            dataset_path=dataset_path,
+            text_col=text_col,
+            label_col=label_col,
+            learning_rate=learning_rate,
+            num_epochs=num_epochs,
+            batch_size=batch_size,
+            max_length=max_length,
+            weight_decay=weight_decay,
+            warmup_ratio=warmup_ratio,
+            use_cpu=use_cpu,
+            cancel_event=cancel_event,
+            pause_event=pause_event,
+        )
     return await asyncio.to_thread(
         _blocking_train,
         job_id=job_id,

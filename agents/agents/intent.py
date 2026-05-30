@@ -38,7 +38,12 @@ Output ONLY valid JSON — no markdown fences, no commentary:
 
 Model hints by task:
   text_classification → "distilbert-base-uncased" (default), "bert-base-uncased", "roberta-base"
-  token_classification → "distilbert-base-uncased", "bert-base-uncased"
+  token_classification (NER) → "dslim/bert-base-NER", "Jean-Baptiste/roberta-large-ner-english"
+    Use token_classification for: "extract entities", "label names/dates/orgs", "find locations",
+    "NER", "named entity recognition", "tag tokens", "annotate entities"
+    label_names should list entity types (e.g. ["PERSON", "ORG", "DATE", "LOC"])
+    input_column = tokens column (space-separated words)
+    label_column = BIO tags column (space-separated tags like B-PER I-PER O)
   text_generation / llm_finetune → "microsoft/phi-2", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
   embedding → "sentence-transformers/all-MiniLM-L6-v2"
   image_classification → "google/vit-base-patch16-224"
