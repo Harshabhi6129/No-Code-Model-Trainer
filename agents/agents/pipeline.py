@@ -5,7 +5,7 @@ import uuid
 from dataclasses import asdict
 from typing import Any, AsyncIterator
 
-from .base import AgentContext, AgentResult
+from .base import AgentContext, AgentResult, StageMetrics
 from .intent import IntentAgent
 from .data import DataAgent
 from .clean_agent import CleanAgent
@@ -44,6 +44,9 @@ class TrainingPipeline:
           restored into the AgentContext so already-completed stages are skipped.
           The caller is responsible for loading the checkpoint; the pipeline
           just honours it.
+
+        The final event emitted is always a "pipeline_summary" result that
+        aggregates per-stage token/cost/latency metrics from every LLM call.
         """
         context = AgentContext(
             run_id=run_id or str(uuid.uuid4()),
@@ -66,6 +69,9 @@ class TrainingPipeline:
             self.train, self.eval, self.deploy,
         ]
         last_result: AgentResult | None = None
+        # Accumulate StageMetrics from every LLM-calling agent
+        all_stage_metrics: list[StageMetrics] = []
+        pipeline_failed = False
 
         for agent in agents:
             # Skip stages already recorded in completed_stages
@@ -78,13 +84,15 @@ class TrainingPipeline:
                     last_result = result
                     yield result, context
                     if not result.success:
-                        return  # Hard failure — stop pipeline
+                        pipeline_failed = True
+                        break  # hard failure
 
             except Exception as exc:
                 logger.error(
                     "Unhandled exception in %s agent: %s",
                     agent.name, exc, exc_info=True,
                 )
+                pipeline_failed = True
                 yield AgentResult(
                     agent_name=agent.name,
                     success=False,
@@ -95,7 +103,13 @@ class TrainingPipeline:
                     ),
                     next_agent=None,
                 ), context
-                return
+
+            # Collect this agent's last LLM call metrics (None for deterministic agents)
+            if hasattr(agent, "last_stage_metrics") and agent.last_stage_metrics is not None:
+                all_stage_metrics.append(agent.last_stage_metrics)
+
+            if pipeline_failed:
+                break
 
             # Mark stage complete so the checkpoint knows where we are
             if last_result and last_result.success:
@@ -104,7 +118,30 @@ class TrainingPipeline:
 
             # Stop if the last result didn't request a next agent
             if last_result is None or last_result.next_agent is None:
-                return
+                break
+
+        # ── Emit pipeline summary ────────────────────────────────────────────
+        # Always emitted (success or failure) so the UI can display cost/latency.
+        summary = _build_pipeline_summary(all_stage_metrics)
+        logger.info(
+            "[%s] Pipeline done — total cost=$%.6f tokens=%d cache_hit=%.1f%%",
+            context.run_id,
+            summary["total_cost_usd"],
+            summary["total_input_tokens"] + summary["total_output_tokens"],
+            summary["overall_cache_hit_ratio"] * 100,
+        )
+        yield AgentResult(
+            agent_name="Pipeline",
+            success=not pipeline_failed,
+            output={"type": "pipeline_summary", **summary},
+            message=(
+                f"Pipeline {'completed' if not pipeline_failed else 'stopped'}. "
+                f"Total cost: ${summary['total_cost_usd']:.4f} · "
+                f"Cache hit: {summary['overall_cache_hit_ratio'] * 100:.0f}%"
+            ),
+            next_agent=None,
+            metadata={"stage_metrics": [_metrics_to_dict(m) for m in all_stage_metrics]},
+        ), context
 
     def context_snapshot(self, context: AgentContext) -> dict[str, Any]:
         """
@@ -117,6 +154,56 @@ class TrainingPipeline:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _build_pipeline_summary(metrics: list[StageMetrics]) -> dict[str, Any]:
+    """Aggregate per-stage StageMetrics into a pipeline-level cost/token summary."""
+    if not metrics:
+        return {
+            "total_cost_usd": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "total_cache_write_tokens": 0,
+            "overall_cache_hit_ratio": 0.0,
+            "total_latency_ms": 0.0,
+            "llm_stages_called": 0,
+            "per_stage": [],
+        }
+
+    total_input   = sum(m.input_tokens for m in metrics)
+    total_output  = sum(m.output_tokens for m in metrics)
+    total_cr      = sum(m.cache_read_tokens for m in metrics)
+    total_cw      = sum(m.cache_write_tokens for m in metrics)
+    total_cost    = sum(m.estimated_cost_usd for m in metrics)
+    total_latency = sum(m.latency_ms for m in metrics)
+
+    return {
+        "total_cost_usd": round(total_cost, 8),
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
+        "total_cache_read_tokens": total_cr,
+        "total_cache_write_tokens": total_cw,
+        "overall_cache_hit_ratio": round(total_cr / max(total_input, 1), 4),
+        "total_latency_ms": round(total_latency, 1),
+        "llm_stages_called": len(metrics),
+        "per_stage": [_metrics_to_dict(m) for m in metrics],
+    }
+
+
+def _metrics_to_dict(m: StageMetrics) -> dict[str, Any]:
+    return {
+        "agent": m.agent_name,
+        "model": m.model,
+        "input_tokens": m.input_tokens,
+        "output_tokens": m.output_tokens,
+        "cache_read_tokens": m.cache_read_tokens,
+        "cache_write_tokens": m.cache_write_tokens,
+        "latency_ms": m.latency_ms,
+        "estimated_cost_usd": m.estimated_cost_usd,
+        "cache_hit_ratio": m.cache_hit_ratio,
+        "timestamp": m.timestamp,
+    }
+
 
 def _restore_context(context: AgentContext, snapshot: dict[str, Any]) -> None:
     """

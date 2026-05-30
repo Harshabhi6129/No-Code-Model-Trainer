@@ -25,6 +25,7 @@ from .ml_core import (
     TrainingCancelledError,
 )
 from .schemas import HPOSearchSpace
+from .training_insights import analyzer as _insights_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +379,13 @@ class TrainAgent(BaseAgent):
         if all_warnings:
             warnings_note = "\n**Warnings:** " + " | ".join(all_warnings)
 
+        # Analyse epoch metrics for overfitting / divergence / stagnation
+        insights = _insights_analyzer.analyze(result.epoch_metrics or [])
+        if insights.warnings:
+            logger.info(
+                "[%s] Training insights: %s", context.run_id, insights.warnings
+            )
+
         yield AgentResult(
             agent_name=self.name,
             success=True,
@@ -389,6 +397,7 @@ class TrainAgent(BaseAgent):
                 f"{warnings_note}"
             ),
             next_agent="Eval",
+            metadata={"training_insights": insights.to_dict()},
         )
 
 

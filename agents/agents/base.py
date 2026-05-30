@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TypeVar, TYPE_CHECKING
 
@@ -27,6 +28,50 @@ OPUS   = "claude-opus-4-7"            # powerful: reserved for complex planning 
 
 # Legacy env-var still works as a global override (useful for testing)
 _ENV_OVERRIDE: str = os.getenv("ANTHROPIC_MODEL", "").strip()
+
+# ── Per-token cost rates (USD per million tokens, as of 2025) ───────────────
+# Used to compute estimated_cost_usd in StageMetrics.
+_COST_PER_M: dict[str, dict[str, float]] = {
+    HAIKU:  {"input": 0.80,  "output": 4.00,  "cache_read": 0.08,  "cache_write": 1.00},
+    SONNET: {"input": 3.00,  "output": 15.00, "cache_read": 0.30,  "cache_write": 3.75},
+    OPUS:   {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75},
+}
+# Fallback rates if model not in table (use Sonnet pricing)
+_DEFAULT_COST = _COST_PER_M[SONNET]
+
+
+def _compute_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_write_tokens: int,
+) -> float:
+    """Return estimated USD cost for a single API call."""
+    rates = _COST_PER_M.get(model, _DEFAULT_COST)
+    return (
+        (input_tokens       * rates["input"])
+        + (output_tokens      * rates["output"])
+        + (cache_read_tokens  * rates["cache_read"])
+        + (cache_write_tokens * rates["cache_write"])
+    ) / 1_000_000
+
+
+# ── Per-call observability ──────────────────────────────────────────────────
+
+@dataclass
+class StageMetrics:
+    """Emitted by BaseAgent._chat() for every Claude API call."""
+    agent_name: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    latency_ms: float
+    timestamp: str          # ISO-8601 UTC
+    estimated_cost_usd: float
+    cache_hit_ratio: float  # cache_read_tokens / max(input_tokens, 1)
 
 
 # ── Pipeline context ────────────────────────────────────────────────────────
@@ -55,6 +100,8 @@ class AgentResult:
     output: dict[str, Any]
     message: str
     next_agent: str | None = None
+    # Observability: per-call token/cost/latency metrics + training insights
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ── Base agent ──────────────────────────────────────────────────────────────
@@ -71,6 +118,8 @@ class BaseAgent(abc.ABC):
         self.client = client
         # Env override wins (useful for CI / cost testing)
         self._resolved_model = _ENV_OVERRIDE or self.model
+        # Last call's metrics — populated by _chat(), read by callers/pipeline
+        self.last_stage_metrics: StageMetrics | None = None
 
     @abc.abstractmethod
     async def run(self, context: AgentContext) -> AgentResult: ...
@@ -120,23 +169,46 @@ class BaseAgent(abc.ABC):
 
         for attempt in range(3):
             try:
+                t0 = time.monotonic()
                 response = await self.client.messages.create(
                     model=self._resolved_model,
                     max_tokens=max_tokens,
                     system=system_param,
                     messages=messages,
                 )
+                latency_ms = (time.monotonic() - t0) * 1000
 
-                # Emit cache hit ratio at DEBUG level for cost observability
                 usage = getattr(response, "usage", None)
-                if usage and logger.isEnabledFor(logging.DEBUG):
-                    cached = getattr(usage, "cache_read_input_tokens", 0) or 0
-                    total  = getattr(usage, "input_tokens", 0) or 1
-                    logger.debug(
-                        "%s [%s] cache: %d/%d tokens (%.0f%% hit)",
-                        self.name, self._resolved_model, cached, total,
-                        100 * cached / total,
-                    )
+                input_tokens       = getattr(usage, "input_tokens", 0) or 0
+                output_tokens      = getattr(usage, "output_tokens", 0) or 0
+                cache_read_tokens  = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_write_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                cache_hit_ratio    = cache_read_tokens / max(input_tokens, 1)
+                cost               = _compute_cost(
+                    self._resolved_model,
+                    input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens,
+                )
+
+                self.last_stage_metrics = StageMetrics(
+                    agent_name=self.name,
+                    model=self._resolved_model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_write_tokens=cache_write_tokens,
+                    latency_ms=round(latency_ms, 1),
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    estimated_cost_usd=round(cost, 8),
+                    cache_hit_ratio=round(cache_hit_ratio, 4),
+                )
+
+                logger.debug(
+                    "%s [%s] tokens in=%d out=%d cache_read=%d cost=$%.6f latency=%.0fms",
+                    self.name, self._resolved_model,
+                    input_tokens, output_tokens, cache_read_tokens,
+                    cost, latency_ms,
+                )
 
                 return response.content[0].text  # type: ignore[union-attr]
 
