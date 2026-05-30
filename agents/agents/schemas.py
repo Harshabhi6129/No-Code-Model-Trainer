@@ -62,17 +62,31 @@ class DataProfile(BaseModel):
     columns: list[str] = Field(default_factory=list)
     input_col: str
     label_col: str | None = None
+
+    # ── Character-level ──────────────────────────────────────────────────────
     avg_input_len: float = 0.0
     max_input_len: int = 0
+
+    # ── Word / token level (B3) ──────────────────────────────────────────────
+    avg_word_count: float = 0.0        # avg words per sample
+    max_word_count: int = 0
+    estimated_tokens_avg: int = 0      # ≈ words * 1.3 — informs max_length choice
+    estimated_tokens_p95: int = 0      # 95th-percentile token estimate
+    vocabulary_richness: float = 0.0   # unique words / total words on sample (0-1)
+    text_quality_score: float = 1.0    # fraction of rows without URLs/HTML/noise (0-1)
+
+    # ── Label / class ────────────────────────────────────────────────────────
     num_classes: int | None = None
     label_distribution: dict[str, int] = Field(default_factory=dict)
-    # min_class_count / max_class_count — 1.0 = perfectly balanced
-    class_balance_ratio: float | None = None
+    class_balance_ratio: float | None = None  # min_count / max_count
+
+    # ── Quality signals ──────────────────────────────────────────────────────
     duplicate_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     missing_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     # Populated by CleanAgent via cleanlab Confident Learning (Phase B2)
     label_noise_estimate: float = Field(default=0.0, ge=0.0, le=1.0)
-    label_noise_count: int = Field(default=0, ge=0)   # absolute row count
+    label_noise_count: int = Field(default=0, ge=0)
+
     issues: list[str] = Field(default_factory=list)
 
 
