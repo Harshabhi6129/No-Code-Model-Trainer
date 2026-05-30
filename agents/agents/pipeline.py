@@ -14,6 +14,7 @@ from .train_agent import TrainAgent
 from .eval_agent import EvalAgent
 from .deploy_agent import DeployAgent
 from .cache import recipe_cache
+from .memory import episodic_memory
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +113,20 @@ class TrainingPipeline:
             if pipeline_failed:
                 break
 
-            # ── After EvalAgent: write successful recipe to cache ─────────────
+            # ── After EvalAgent: write successful recipe to cache + memory ──────
             if agent.name == "Eval" and last_result and last_result.success:
-                grade = context.eval_result.get("evaluation_grade", "")
-                recipe = context.model_recipe
+                grade     = context.eval_result.get("evaluation_grade", "")
+                eval_f1   = float(context.eval_result.get("f1") or 0)
+                recipe    = context.model_recipe
                 task_type = context.task_spec.get("task_type", "text_classification")
                 if recipe and grade:
                     recipe_cache.set(context.data_profile, task_type, recipe, grade)
+                    try:
+                        episodic_memory.memorize(
+                            context.data_profile, task_type, recipe, grade, eval_f1
+                        )
+                    except Exception as exc:
+                        logger.debug("EpisodicMemory memorize error: %s", exc)
 
             # Mark stage complete so the checkpoint knows where we are
             if last_result and last_result.success:
