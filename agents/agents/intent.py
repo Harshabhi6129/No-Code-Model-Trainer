@@ -1,7 +1,21 @@
 from __future__ import annotations
 
-from .base import BaseAgent, AgentContext, AgentResult, SONNET
+import os
+
+from .base import BaseAgent, AgentContext, AgentResult, HAIKU, SONNET
 from .schemas import TaskSpec
+
+# Respect explicit model override env vars (for CI / cost testing).
+# If either is set, dynamic routing is bypassed entirely.
+_FORCE_MODEL: str = (
+    os.getenv("MODELFORGE_FORCE_MODEL", "").strip()
+    or os.getenv("ANTHROPIC_MODEL", "").strip()
+)
+
+# Threshold for intent complexity routing.
+# Below this character count → short, clear intent → Haiku suffices.
+# At or above → detailed / technical intent → Sonnet reasoning needed.
+_HAIKU_INTENT_MAX_LEN = 100
 
 # ── System prompt (cached — ~300 tokens, repeated on every run) ─────────────
 # Note: below the 1 024-token cache minimum; cache_system still accepted without error.
@@ -33,9 +47,16 @@ Model hints by task:
 
 class IntentAgent(BaseAgent):
     name  = "Intent"
-    model = SONNET  # Needs real NL reasoning to parse ambiguous user descriptions
+    model = SONNET  # Default; overridden at runtime based on intent complexity
 
     async def run(self, context: AgentContext) -> AgentResult:
+        # Dynamic routing: short, clear intents only need Haiku's pattern-matching.
+        # Sonnet is reserved for long / technically detailed / ambiguous intents.
+        # Env override wins (MODELFORGE_FORCE_MODEL / ANTHROPIC_MODEL).
+        if not _FORCE_MODEL:
+            intent_len = len(context.user_intent.strip())
+            self._resolved_model = HAIKU if intent_len < _HAIKU_INTENT_MAX_LEN else SONNET
+
         raw = await self._chat(
             system=SYSTEM,
             messages=[{"role": "user", "content": context.user_intent}],
