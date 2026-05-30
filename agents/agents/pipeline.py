@@ -13,6 +13,7 @@ from .model import ModelAgent
 from .train_agent import TrainAgent
 from .eval_agent import EvalAgent
 from .deploy_agent import DeployAgent
+from .cache import recipe_cache
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,14 @@ class TrainingPipeline:
 
             if pipeline_failed:
                 break
+
+            # ── After EvalAgent: write successful recipe to cache ─────────────
+            if agent.name == "Eval" and last_result and last_result.success:
+                grade = context.eval_result.get("evaluation_grade", "")
+                recipe = context.model_recipe
+                task_type = context.task_spec.get("task_type", "text_classification")
+                if recipe and grade:
+                    recipe_cache.set(context.data_profile, task_type, recipe, grade)
 
             # Mark stage complete so the checkpoint knows where we are
             if last_result and last_result.success:
