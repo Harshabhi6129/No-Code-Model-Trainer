@@ -753,6 +753,58 @@ async def get_models(
     return results
 
 
+@app.get("/runs/{run_id}/script")
+async def download_training_script(run_id: str) -> StreamingResponse:
+    """
+    Generate and download a standalone Python training script for a completed run.
+
+    Loads the pipeline checkpoint from Supabase (task_spec + model_recipe +
+    training_result), generates a copy-paste-runnable script via code_generator,
+    and returns it as a .py file download.
+    """
+    from services.run_event_writer import load_pipeline_checkpoint
+
+    checkpoint = await load_pipeline_checkpoint(run_id)
+    if not checkpoint:
+        raise HTTPException(
+            404,
+            f"No pipeline checkpoint found for run_id={run_id}. "
+            "The run may not have completed or Supabase is not configured."
+        )
+
+    task_spec       = checkpoint.get("task_spec") or {}
+    data_profile    = checkpoint.get("data_profile") or {}
+    model_recipe    = checkpoint.get("model_recipe") or {}
+    training_result = checkpoint.get("training_result") or {}
+
+    if not model_recipe or not training_result:
+        raise HTTPException(
+            422,
+            "Run did not complete training — no model recipe or training result available."
+        )
+
+    _agents_import()
+    from agents.services.code_generator import generate_training_script, CodeGenerationError
+
+    try:
+        script = generate_training_script(
+            task_spec=task_spec,
+            data_profile=data_profile,
+            model_recipe=model_recipe,
+            training_result=training_result,
+        )
+    except CodeGenerationError as exc:
+        logger.error("Script generation failed for run %s: %s", run_id, exc)
+        raise HTTPException(500, f"Could not generate training script: {exc}") from exc
+
+    filename = f"train_{run_id[:8]}.py"
+    return StreamingResponse(
+        iter([script]),
+        media_type="text/x-python",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}

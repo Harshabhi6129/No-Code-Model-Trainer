@@ -269,11 +269,36 @@ function RetrainButton({ run }: { run: Run }) {
 // ---------------------------------------------------------------------------
 
 function ExportSection({ run }: { run: Run }) {
-  const [format, setFormat]   = useState<"onnx" | "torchscript">("onnx")
-  const [exporting, setExporting] = useState(false)
-  const [error, setError]     = useState<string | null>(null)
+  const [format, setFormat]         = useState<"onnx" | "torchscript">("onnx")
+  const [exporting, setExporting]   = useState(false)
+  const [scriptDling, setScriptDl]  = useState(false)
+  const [error, setError]           = useState<string | null>(null)
 
   if (run.status !== "completed" || !run.artifact_path) return null
+
+  async function downloadScript() {
+    setScriptDl(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API_URL}/runs/${run.id}/script`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: "Script generation failed" }))
+        throw new Error(body.detail ?? "Script generation failed")
+      }
+      const text = await res.text()
+      const blob = new Blob([text], { type: "text/x-python" })
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement("a")
+      a.href     = url
+      a.download = `train_${run.id.slice(0, 8)}.py`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setScriptDl(false)
+    }
+  }
 
   async function handleExport() {
     setExporting(true)
@@ -333,12 +358,30 @@ function ExportSection({ run }: { run: Run }) {
               {error}
             </div>
           )}
-          <Button onClick={handleExport} disabled={exporting} size="sm" className="gap-2">
-            {exporting
-              ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Converting…</>
-              : <><Download className="h-3.5 w-3.5" />Export {format.toUpperCase()}</>
-            }
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button onClick={handleExport} disabled={exporting} size="sm" className="gap-2">
+              {exporting
+                ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Converting…</>
+                : <><Download className="h-3.5 w-3.5" />Export {format.toUpperCase()}</>
+              }
+            </Button>
+            <Button
+              onClick={downloadScript}
+              disabled={scriptDling}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              title="Download a standalone Python training script that replicates this run"
+            >
+              {scriptDling
+                ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Generating…</>
+                : <><FileText className="h-3.5 w-3.5" />Download Training Script</>
+              }
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Training script: a self-contained Python file you can run or modify locally.
+          </p>
         </CardContent>
       </Card>
     </div>
