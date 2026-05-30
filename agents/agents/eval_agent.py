@@ -55,6 +55,12 @@ For datasets < 200 samples:
   and that the reported metrics are therefore a lower bound on true model quality
 - label_noise_estimate >= 0.20: flag prominently — high noise severely limits
   how well any model can learn from this dataset regardless of architecture
+- ece (Expected Calibration Error) >= 0.10: model is poorly calibrated —
+  its confidence scores are unreliable; mention in concerns and suggest
+  temperature scaling or label smoothing in next steps
+- ece 0.05-0.10: moderate overconfidence — note briefly
+- ece < 0.05 and accuracy >= 0.85: model is both accurate AND well-calibrated —
+  cite as a strength
 
 === NEXT STEPS ===
 Be specific — mention actual actions (e.g., "add 50 more examples for class 'X'",
@@ -108,6 +114,7 @@ def _build_prompt(context: AgentContext) -> str:
             "f1_weighted":  tr.get("f1"),
             "precision":    tr.get("precision"),
             "recall":       tr.get("recall"),
+            "ece":          tr.get("ece"),   # Expected Calibration Error (C1)
             "per_class_f1": per_class,
         },
         "warnings_from_training": all_warnings,
@@ -175,11 +182,12 @@ class EvalAgent(BaseAgent):
 
         # ── Merge raw metrics into output so Supabase gets everything ─────────
         eval_output: dict = {
-            # Raw metrics (for run detail page charts)
+            # Raw metrics (for run detail page charts + calibration display)
             "accuracy":     tr.get("accuracy"),
             "f1":           tr.get("f1"),
             "precision":    tr.get("precision"),
             "recall":       tr.get("recall"),
+            "ece":          tr.get("ece"),      # Expected Calibration Error (C1)
             "per_class_f1": tr.get("per_class_f1", {}),
             "num_labels":   tr.get("num_labels"),
             "label_names":  tr.get("label_names", []),

@@ -741,14 +741,24 @@ def _blocking_train(
         if lbl in report
     }
 
+    # ── C1: Expected Calibration Error ────────────────────────────────────────
+    # Converts raw logits → probabilities → computes ECE via equal-width bins.
+    # ECE < 0.05: well-calibrated  |  0.05-0.10: moderate  |  >0.10: poor
+    ece = _compute_ece(
+        y_true=y_true,
+        raw_logits=pred_out.predictions,
+        n_bins=10,
+    )
+
     metrics: dict[str, Any] = {
-        "accuracy":    round(acc, 4),
-        "f1":          round(f1, 4),
-        "precision":   round(precision, 4),
-        "recall":      round(recall, 4),
-        "per_class_f1": per_class_f1,
-        "num_labels":  num_labels,
-        "label_names": label_names,
+        "accuracy":      round(acc, 4),
+        "f1":            round(f1, 4),
+        "precision":     round(precision, 4),
+        "recall":        round(recall, 4),
+        "ece":           round(ece, 4),   # Expected Calibration Error (C1)
+        "per_class_f1":  per_class_f1,
+        "num_labels":    num_labels,
+        "label_names":   label_names,
         "train_samples": len(train_ds),
         "eval_samples":  len(test_ds),
     }
@@ -841,6 +851,61 @@ async def train_model_async(
         cancel_event=cancel_event,
         pause_event=pause_event,
     )
+
+
+# ---------------------------------------------------------------------------
+# C1: Expected Calibration Error
+# ---------------------------------------------------------------------------
+
+def _compute_ece(
+    y_true: "list[int]",
+    raw_logits: "Any",
+    n_bins: int = 10,
+) -> float:
+    """
+    Compute Expected Calibration Error from raw model logits.
+
+    ECE measures how well a model's confidence aligns with its actual accuracy.
+    A perfect model has ECE=0; overconfident models have ECE>0.
+
+    Interpretation:
+      ECE < 0.05:  well-calibrated
+      ECE 0.05-0.10: moderate overconfidence — predictions slightly inflated
+      ECE > 0.10:  poorly calibrated — confidence scores unreliable
+
+    Uses equal-width bins (standard ECE formulation from Guo et al. 2017).
+    Returns 0.0 on any failure (never raises — purely diagnostic).
+    """
+    try:
+        import numpy as np
+
+        logits = np.array(raw_logits, dtype=float)
+        # Softmax: stable numerics
+        logits -= logits.max(axis=1, keepdims=True)
+        exp    = np.exp(logits)
+        probs  = exp / exp.sum(axis=1, keepdims=True)
+
+        confidences = probs.max(axis=1)
+        predictions = probs.argmax(axis=1)
+        labels      = np.array(y_true, dtype=int)
+        accuracies  = (predictions == labels).astype(float)
+
+        ece = 0.0
+        n   = len(labels)
+        for b in range(n_bins):
+            lo = b / n_bins
+            hi = (b + 1) / n_bins
+            in_bin = (confidences > lo) & (confidences <= hi)
+            if in_bin.sum() == 0:
+                continue
+            bin_acc  = accuracies[in_bin].mean()
+            bin_conf = confidences[in_bin].mean()
+            ece     += in_bin.sum() * abs(bin_acc - bin_conf)
+
+        return float(ece / n)
+    except Exception as exc:
+        logger.debug("_compute_ece failed (non-critical): %s", exc)
+        return 0.0
 
 
 # ---------------------------------------------------------------------------

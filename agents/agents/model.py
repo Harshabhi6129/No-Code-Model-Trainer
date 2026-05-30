@@ -134,17 +134,25 @@ class ModelAgent(BaseAgent):
 
         catalog = catalog_summary_for_prompt()
         import json
-        compact_profile = json.dumps({
-            "num_rows":            num_rows,
-            "num_classes":         profile.get("num_classes"),
-            "avg_input_len":       profile.get("avg_input_len"),
-            "class_balance_ratio": profile.get("class_balance_ratio"),
-            "label_noise_estimate": profile.get("label_noise_estimate", 0.0),
-            "issues":              profile.get("issues", []),
-        }, indent=2)
+        # Compact profile: only the signals that drive model + hyperparameter selection.
+        # estimated_tokens_p95 is the key new field — it tells the LLM what max_length
+        # to set so 95% of samples are covered without excessive padding.
+        compact_profile = {
+            "num_rows":              num_rows,
+            "num_classes":           profile.get("num_classes"),
+            "avg_input_len":         profile.get("avg_input_len"),
+            "avg_word_count":        profile.get("avg_word_count"),
+            "estimated_tokens_avg":  profile.get("estimated_tokens_avg"),
+            "estimated_tokens_p95":  profile.get("estimated_tokens_p95"),
+            "vocabulary_richness":   profile.get("vocabulary_richness"),
+            "text_quality_score":    profile.get("text_quality_score"),
+            "class_balance_ratio":   profile.get("class_balance_ratio"),
+            "label_noise_estimate":  profile.get("label_noise_estimate", 0.0),
+            "issues":                profile.get("issues", []),
+        }
         user_msg = json.dumps({
             "task_spec":    context.task_spec,
-            "data_profile": json.loads(compact_profile),
+            "data_profile": compact_profile,
         }, indent=2)
 
         # ── Choose output mode ────────────────────────────────────────────────
