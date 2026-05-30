@@ -57,6 +57,7 @@ interface AgentMessage {
   success: boolean
   message: string
   output: Record<string, unknown>
+  metadata?: Record<string, unknown>
 }
 
 interface HyperParams {
@@ -879,9 +880,18 @@ function TrainingColumn({
           <div className="space-y-4">
             {/* Pipeline DAG visualization — replaces the old pill-based progress */}
             <div className="space-y-2">
-              <div className="flex justify-between text-xs">
+              <div className="flex justify-between text-xs items-center">
                 <span>{streaming ? "Pipeline running…" : session.status === "completed" ? "Completed" : "Failed"}</span>
-                <span className="text-muted-foreground">{completed.length} / {AGENT_ORDER.length}</span>
+                <div className="flex items-center gap-2">
+                  {/* Modal H100 badge — shown when Modal GPU is in use */}
+                  {messages.some(m => m.metadata?.training_location === "modal_h100") && (
+                    <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 border border-violet-500/30 font-medium">
+                      <Zap className="h-2.5 w-2.5" />
+                      Modal H100
+                    </span>
+                  )}
+                  <span className="text-muted-foreground">{completed.length} / {AGENT_ORDER.length}</span>
+                </div>
               </div>
               <Progress value={progress} className="h-2" />
               <div className="rounded-xl border border-border bg-secondary/20 p-3">

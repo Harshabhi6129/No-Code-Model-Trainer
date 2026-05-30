@@ -27,6 +27,13 @@ from .ml_core import (
 from .schemas import HPOSearchSpace
 from .training_insights import analyzer as _insights_analyzer
 
+def _has_modal() -> bool:
+    try:
+        from services.modal_runner import has_modal
+        return has_modal()
+    except ImportError:
+        return False
+
 logger = logging.getLogger(__name__)
 
 _KEEPALIVE_INTERVAL = 20   # seconds between keepalive SSE events
@@ -205,7 +212,10 @@ class TrainAgent(BaseAgent):
             next_agent="Eval",
         )
 
-        # ── Launch training as a background task ──────────────────────────────
+        # ── Select training backend (Modal GPU or local) ──────────────────────
+        use_modal = _has_modal()
+        training_location = "modal_h100" if use_modal else "local"
+
         start_time = time.monotonic()
         progress_log: list[dict] = []
         progress_lock = threading.Lock()
@@ -214,29 +224,57 @@ class TrainAgent(BaseAgent):
         pause_event.set()  # start in running state (set = unblocked)
         _emitted_steps: set[int] = set()  # track which steps we've already streamed
 
-        training_task = asyncio.create_task(
-            train_model_async(
-                job_id=context.run_id,
-                model_id=model_id,
-                dataset_path=context.dataset_path or "",
-                text_col=text_col,
-                label_col=label_col,
-                task_type=task_type,
-                training_approach=training_approach,
-                learning_rate=learning_rate,
-                num_epochs=num_epochs,
-                batch_size=batch_size,
-                max_length=max_length,
-                weight_decay=weight_decay,
-                warmup_ratio=warmup_ratio,
-                lora_r=lora_r,
-                use_cpu=False,
-                progress_log=progress_log,
-                progress_lock=progress_lock,
-                cancel_event=cancel_event,
-                pause_event=pause_event,
+        if use_modal:
+            # Emit warm-up notice (Modal cold-starts take 30-60s)
+            yield AgentResult(
+                agent_name=self.name, success=True,
+                output={"status": "warming_up", "training_location": training_location, "final": False},
+                message="Warming up Modal H100 GPU — this takes ~30s on first run…",
+                next_agent="Eval",
             )
-        )
+            from services.modal_runner import run_training_on_modal
+            training_task = asyncio.create_task(
+                run_training_on_modal({
+                    "job_id":            context.run_id,
+                    "model_id":          model_id,
+                    "dataset_path":      context.dataset_path or "",
+                    "text_col":          text_col,
+                    "label_col":         label_col,
+                    "task_type":         task_type,
+                    "training_approach": training_approach,
+                    "learning_rate":     learning_rate,
+                    "num_epochs":        num_epochs,
+                    "batch_size":        batch_size,
+                    "max_length":        max_length,
+                    "weight_decay":      weight_decay,
+                    "warmup_ratio":      warmup_ratio,
+                    "lora_r":            lora_r,
+                })
+            )
+        else:
+            training_task = asyncio.create_task(
+                train_model_async(
+                    job_id=context.run_id,
+                    model_id=model_id,
+                    dataset_path=context.dataset_path or "",
+                    text_col=text_col,
+                    label_col=label_col,
+                    task_type=task_type,
+                    training_approach=training_approach,
+                    learning_rate=learning_rate,
+                    num_epochs=num_epochs,
+                    batch_size=batch_size,
+                    max_length=max_length,
+                    weight_decay=weight_decay,
+                    warmup_ratio=warmup_ratio,
+                    lora_r=lora_r,
+                    use_cpu=False,
+                    progress_log=progress_log,
+                    progress_lock=progress_lock,
+                    cancel_event=cancel_event,
+                    pause_event=pause_event,
+                )
+            )
         if context.run_id:
             _active_runs[context.run_id] = (training_task, cancel_event, pause_event)
 
@@ -397,7 +435,10 @@ class TrainAgent(BaseAgent):
                 f"{warnings_note}"
             ),
             next_agent="Eval",
-            metadata={"training_insights": insights.to_dict()},
+            metadata={
+                "training_insights": insights.to_dict(),
+                "training_location": training_location,
+            },
         )
 
 
