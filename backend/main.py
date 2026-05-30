@@ -44,6 +44,11 @@ RUNS_DIR = Path(os.getenv("RUNS_DIR", str(Path(__file__).parent.parent / "agents
 # Rebuilt from .meta.json sidecars on startup so it survives server restarts.
 _FILE_REGISTRY: dict[str, Path] = {}
 
+# Pending clarifications: run_id → original ChatRequest params.
+# Populated when IntentAgent returns confidence < 0.7 and asks a clarifying question.
+# Consumed (and removed) by POST /clarify/{run_id}.
+_pending_clarifications: dict[str, dict] = {}
+
 
 def _rebuild_registry_from_disk() -> None:
     """Scan UPLOADS_DIR for .meta.json sidecars and restore the in-memory registry."""
@@ -359,8 +364,30 @@ async def chat(req: ChatRequest) -> StreamingResponse:
                     "success": result.success,
                     "message": result.message,
                     "output":  result.output,
+                    "metadata": result.metadata,
                 })
                 yield f"data: {data}\n\n"
+
+                # ── HITL: pause pipeline when IntentAgent needs clarification ──
+                # IntentAgent returns next_agent=None with clarification_needed set
+                # when confidence < 0.7. Store params so /clarify/{run_id} can resume.
+                if (
+                    result.agent_name == "Intent"
+                    and result.success
+                    and result.output.get("clarification_needed")
+                    and req.run_id
+                ):
+                    _pending_clarifications[req.run_id] = {
+                        "message":                  req.message,
+                        "file_id":                  req.file_id,
+                        "hyperparameter_overrides": req.hyperparameter_overrides,
+                        "hf_token":                 req.hf_token,
+                        "clarification_question":   result.output["clarification_needed"],
+                    }
+                    logger.info(
+                        "[%s] Clarification needed — run paused awaiting user response",
+                        req.run_id,
+                    )
 
                 if req.run_id:
                     # Always persist the agent event
@@ -394,6 +421,91 @@ async def chat(req: ChatRequest) -> StreamingResponse:
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+class ClarifyRequest(BaseModel):
+    user_response: str
+
+    @field_validator("user_response")
+    @classmethod
+    def response_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("user_response cannot be empty")
+        return v.strip()
+
+
+@app.post("/clarify/{run_id}")
+async def clarify_intent(run_id: str, req: ClarifyRequest) -> StreamingResponse:
+    """
+    Resume a pipeline that paused waiting for user clarification.
+
+    The original intent is amended with the user's response and the pipeline
+    restarts from IntentAgent with the enriched intent. Returns SSE.
+    """
+    params = _pending_clarifications.pop(run_id, None)
+    if params is None:
+        raise HTTPException(
+            404,
+            f"No pending clarification found for run_id={run_id}. "
+            "The session may have timed out or already been resumed."
+        )
+
+    original_intent   = params["message"]
+    amended_intent    = (
+        f"{original_intent}\n\n"
+        f"User clarification: {req.user_response}"
+    )
+    file_id           = params.get("file_id")
+    overrides         = params.get("hyperparameter_overrides", {})
+    hf_token          = params.get("hf_token")
+    dataset_path      = _resolve_file_id(file_id)
+    _agents_import()
+
+    async def clarify_stream():
+        try:
+            from agents.pipeline import TrainingPipeline
+            from services.run_event_writer import write_agent_event, write_pipeline_checkpoint
+
+            pipeline = TrainingPipeline()
+            async for result, context in pipeline.run_streaming(
+                user_intent=amended_intent,
+                dataset_path=dataset_path,
+                hyperparameter_overrides=overrides,
+                hf_token=hf_token,
+                run_id=run_id,
+            ):
+                data = json.dumps({
+                    "agent":   result.agent_name,
+                    "success": result.success,
+                    "message": result.message,
+                    "output":  result.output,
+                    "metadata": result.metadata,
+                })
+                yield f"data: {data}\n\n"
+
+                await write_agent_event(
+                    run_id=run_id,
+                    agent_name=result.agent_name,
+                    success=result.success,
+                    message=result.message,
+                    output=result.output,
+                )
+                if result.success:
+                    await write_pipeline_checkpoint(
+                        run_id=run_id,
+                        completed_stages=list(context.completed_stages),
+                        checkpoint_data=pipeline.context_snapshot(context),
+                    )
+                if not result.success:
+                    break
+
+        except Exception as exc:
+            logger.error("Clarify pipeline error: %s", exc, exc_info=True)
+            yield f"data: {json.dumps({'agent': 'System', 'success': False, 'message': str(exc), 'output': {}})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(clarify_stream(), media_type="text/event-stream")
 
 
 @app.post("/train")

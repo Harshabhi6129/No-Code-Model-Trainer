@@ -103,6 +103,8 @@ interface TrainingSession {
   artifactPath: string | null
   errorMessage: string | null
   epochMetrics: EpochPoint[]
+  // HITL: set when IntentAgent requests clarification (confidence < 0.7)
+  clarificationQuestion: string | null
 }
 
 type Action =
@@ -198,6 +200,7 @@ function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession 
     artifactPath: null,
     errorMessage: null,
     epochMetrics: [],
+    clarificationQuestion: null,
     ...overrides,
   }
 }
@@ -1449,6 +1452,24 @@ export function TrainClient() {
               setLiveEpochMetrics(prev => ({ ...prev, [sessionId]: [...epochPoints] }))
               continue
             }
+
+            // ── HITL: IntentAgent needs clarification ─────────────────────────
+            if (
+              msg.agent === "Intent"
+              && msg.success
+              && typeof msg.output.clarification_needed === "string"
+              && msg.output.clarification_needed
+            ) {
+              updateSession(sessionId, {
+                status: "training",  // keep training state — not failed
+                clarificationQuestion: msg.output.clarification_needed as string,
+              })
+              allMessages.push(msg)
+              setLiveMessages(prev => ({ ...prev, [sessionId]: [...allMessages] }))
+              // Stream will end (pipeline paused) — break out of the read loop
+              break
+            }
+
             const lastIdx = allMessages.findLastIndex(m => m.agent === msg.agent)
             const lastWasKeepalive = lastIdx >= 0 && allMessages[lastIdx].output.final === false
             if (lastWasKeepalive) {
@@ -1533,6 +1554,89 @@ export function TrainClient() {
     }
   }
 
+  // ── HITL: submit user clarification and resume pipeline ──────────────────
+  async function submitClarification(sessionId: string, userResponse: string) {
+    const session = state.sessions.find(s => s.id === sessionId)
+    if (!session?.runId || !userResponse.trim()) return
+
+    // Clear the question so the modal closes
+    updateSession(sessionId, { clarificationQuestion: null })
+
+    try {
+      const res = await fetch(`${API_URL}/clarify/${session.runId}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ user_response: userResponse }),
+      })
+      if (!res.ok) {
+        const errText = await res.text()
+        toast.error(`Clarification failed: ${errText}`)
+        updateSession(sessionId, { status: "failed", errorMessage: errText })
+        return
+      }
+
+      // Re-read the resumed SSE stream (same loop as startTraining)
+      const reader  = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buf = ""
+      const existingMsgs = liveMessages[sessionId] ?? []
+      const allMessages: AgentMessage[] = [...existingMsgs]
+      const epochPoints: EpochPoint[] = [...(session.epochMetrics ?? [])]
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split("\n")
+        buf = lines.pop() ?? ""
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          const payload = line.slice(6).trim()
+          if (payload === "[DONE]") break
+          try {
+            const msg: AgentMessage = JSON.parse(payload)
+            if (msg.agent === "Train" && msg.output.status === "epoch") {
+              const pt: EpochPoint = {
+                epoch: msg.output.epoch as number, step: msg.output.step as number,
+                loss: msg.output.loss as number | null, eval_loss: msg.output.eval_loss as number | null,
+                learning_rate: msg.output.learning_rate as number | null,
+              }
+              epochPoints.push(pt)
+              setLiveEpochMetrics(prev => ({ ...prev, [sessionId]: [...epochPoints] }))
+              continue
+            }
+            const lastIdx = allMessages.findLastIndex(m => m.agent === msg.agent)
+            const lastWasKeepalive = lastIdx >= 0 && allMessages[lastIdx].output.final === false
+            if (lastWasKeepalive) allMessages[lastIdx] = msg
+            else allMessages.push(msg)
+            setLiveMessages(prev => ({ ...prev, [sessionId]: [...allMessages] }))
+          } catch { /* ignore parse errors */ }
+        }
+      }
+
+      const pipelineSuccess = allMessages.filter(m => m.agent !== "Intent").every(m => m.success)
+      const evalOut = (allMessages.find(m => m.agent === "Eval")?.output ?? {}) as Record<string, unknown>
+      const trainOut = (allMessages.find(m => m.agent === "Train" && m.output.final !== false)?.output ?? {}) as Record<string, unknown>
+      const mSrc = Object.keys(evalOut).length > 0 ? evalOut : trainOut
+      updateSession(sessionId, {
+        status:       pipelineSuccess ? "completed" : "failed",
+        grade:        typeof evalOut.evaluation_grade === "string" ? evalOut.evaluation_grade : null,
+        accuracy:     typeof mSrc.accuracy === "number" ? mSrc.accuracy : null,
+        f1:           typeof mSrc.f1 === "number" ? mSrc.f1 : null,
+        artifactPath: trainOut.model_path as string ?? null,
+        errorMessage: pipelineSuccess ? null : (allMessages.find(m => !m.success)?.message ?? null),
+        epochMetrics: epochPoints,
+      })
+      if (!pipelineSuccess) toast.error("Pipeline encountered an error after clarification")
+      else toast.success("Training complete!")
+    } catch (err) {
+      toast.error(`Clarification error: ${err}`)
+      updateSession(sessionId, { status: "failed", errorMessage: String(err) })
+    } finally {
+      setStreamingId(null)
+    }
+  }
+
   const activeSession      = state.sessions.find(s => s.id === state.activeId) ?? null
   const activeMsgs         = activeSession ? (liveMessages[activeSession.id] ?? []) : []
   const activeEpochMetrics = activeSession
@@ -1564,6 +1668,93 @@ export function TrainClient() {
         ) : (
           <EmptyWorkspace onAdd={addSession} />
         )}
+      </div>
+
+      {/* ── HITL Clarification Modal ─────────────────────────────────────── */}
+      {activeSession?.clarificationQuestion && (
+        <ClarificationModal
+          question={activeSession.clarificationQuestion}
+          onSubmit={answer => submitClarification(activeSession.id, answer)}
+          onDismiss={() => updateSession(activeSession.id, {
+            clarificationQuestion: null,
+            status: "failed",
+            errorMessage: "Clarification skipped — pipeline paused.",
+          })}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── ClarificationModal ────────────────────────────────────────────────────────
+
+function ClarificationModal({
+  question,
+  onSubmit,
+  onDismiss,
+}: {
+  question: string
+  onSubmit: (answer: string) => void
+  onDismiss: () => void
+}) {
+  const [answer, setAnswer] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleSubmit() {
+    if (!answer.trim()) return
+    setSubmitting(true)
+    onSubmit(answer.trim())
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="w-full max-w-lg mx-4 bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="h-8 w-8 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0 mt-0.5">
+            <AlertTriangle className="h-4 w-4 text-amber-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground">Clarification Needed</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              The AI needs a bit more information to understand your training goal.
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-muted/50 rounded-lg p-4 border border-border">
+          <p className="text-sm text-foreground">{question}</p>
+        </div>
+
+        <textarea
+          value={answer}
+          onChange={e => setAnswer(e.target.value)}
+          placeholder="Type your answer here…"
+          rows={3}
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+          onKeyDown={e => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit()
+          }}
+        />
+
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onDismiss} disabled={submitting}>
+            Skip (pause run)
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleSubmit}
+            disabled={!answer.trim() || submitting}
+          >
+            {submitting ? (
+              <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Resuming…</>
+            ) : (
+              <><ArrowRight className="h-3.5 w-3.5 mr-1.5" />Answer &amp; Continue</>
+            )}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground text-center">
+          Tip: Press ⌘+Enter to submit
+        </p>
       </div>
     </div>
   )
