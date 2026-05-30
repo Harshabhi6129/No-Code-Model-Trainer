@@ -732,6 +732,8 @@ def _blocking_train(
     precision = float(precision_score(y_true, y_pred, average="weighted", zero_division=0))
     recall    = float(recall_score(y_true, y_pred, average="weighted", zero_division=0))
 
+    from sklearn.metrics import confusion_matrix as sk_confusion_matrix
+
     report = classification_report(
         y_true, y_pred, target_names=label_names, output_dict=True, zero_division=0
     )
@@ -740,6 +742,23 @@ def _blocking_train(
         for lbl in label_names
         if lbl in report
     }
+    # Full per-class precision/recall/F1 for the confusion matrix UI
+    per_class_metrics: dict[str, dict[str, float]] = {
+        lbl: {
+            "precision": round(float(report[lbl]["precision"]), 4),
+            "recall":    round(float(report[lbl]["recall"]), 4),
+            "f1":        round(float(report[lbl]["f1-score"]), 4),
+            "support":   int(report[lbl]["support"]),
+        }
+        for lbl in label_names
+        if lbl in report
+    }
+    # Confusion matrix as list-of-lists (rows = actual, cols = predicted)
+    try:
+        cm = sk_confusion_matrix(y_true, y_pred, labels=list(range(num_labels)))
+        confusion_matrix_data: list[list[int]] = cm.tolist()
+    except Exception:
+        confusion_matrix_data = []
 
     # ── C1: Expected Calibration Error ────────────────────────────────────────
     # Converts raw logits → probabilities → computes ECE via equal-width bins.
@@ -751,16 +770,18 @@ def _blocking_train(
     )
 
     metrics: dict[str, Any] = {
-        "accuracy":      round(acc, 4),
-        "f1":            round(f1, 4),
-        "precision":     round(precision, 4),
-        "recall":        round(recall, 4),
-        "ece":           round(ece, 4),   # Expected Calibration Error (C1)
-        "per_class_f1":  per_class_f1,
-        "num_labels":    num_labels,
-        "label_names":   label_names,
-        "train_samples": len(train_ds),
-        "eval_samples":  len(test_ds),
+        "accuracy":           round(acc, 4),
+        "f1":                 round(f1, 4),
+        "precision":          round(precision, 4),
+        "recall":             round(recall, 4),
+        "ece":                round(ece, 4),   # Expected Calibration Error (C1)
+        "per_class_f1":       per_class_f1,
+        "per_class_metrics":  per_class_metrics,   # full precision/recall/f1/support per class
+        "confusion_matrix":   confusion_matrix_data,  # list[list[int]]
+        "num_labels":         num_labels,
+        "label_names":        label_names,
+        "train_samples":      len(train_ds),
+        "eval_samples":       len(test_ds),
     }
 
     # ── Save model + tokenizer ────────────────────────────────────────────────
