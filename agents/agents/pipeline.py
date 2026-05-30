@@ -155,6 +155,90 @@ class TrainingPipeline:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def summarize_pipeline_context(context: "AgentContext") -> dict[str, Any]:
+    """
+    Return a compact, JSON-safe summary of pipeline context for downstream LLM prompts.
+
+    Goals:
+      - Total JSON < 5 KB regardless of dataset size
+      - Secrets (hf_token) never included
+      - Large arrays (epoch_metrics, full label_distribution) are truncated
+      - EvalAgent and DeployAgent receive exactly what they need — nothing more
+
+    The raw context fields are NOT modified; this returns a new dict.
+    """
+    profile = context.data_profile
+    tr      = context.training_result
+    spec    = context.task_spec
+    ev      = context.eval_result
+
+    # Truncate label_distribution to top-10 by count (keeps prompt compact for >10 class tasks)
+    label_dist = profile.get("label_distribution", {})
+    if len(label_dist) > _SUMMARY_MAX_CLASSES:
+        top_classes = dict(
+            sorted(label_dist.items(), key=lambda x: x[1], reverse=True)[:_SUMMARY_MAX_CLASSES]
+        )
+        remaining = len(label_dist) - _SUMMARY_MAX_CLASSES
+        top_classes[f"… and {remaining} more classes"] = sum(
+            v for k, v in label_dist.items()
+            if k not in top_classes
+        )
+        label_dist = top_classes
+
+    # Loss history: only last 5 entries (sufficient for trend analysis)
+    epoch_metrics = tr.get("epoch_metrics", [])
+    loss_history_tail = epoch_metrics[-5:] if epoch_metrics else []
+
+    return {
+        "task_spec": {
+            "task_type":    spec.get("task_type"),
+            "num_labels":   spec.get("num_labels"),
+            "label_names":  spec.get("label_names"),
+            "input_column": spec.get("input_column"),
+            "label_column": spec.get("label_column"),
+        },
+        "data_profile": {
+            "num_rows":              profile.get("num_rows"),
+            "num_classes":           profile.get("num_classes"),
+            "label_distribution":    label_dist,
+            "label_noise_estimate":  profile.get("label_noise_estimate", 0.0),
+            "label_noise_count":     profile.get("label_noise_count", 0),
+            "text_quality_score":    profile.get("text_quality_score", 1.0),
+            "issues":                profile.get("issues", []),
+        },
+        "training_result": {
+            "base_model":           tr.get("base_model"),
+            "training_approach":    tr.get("training_approach"),
+            "device":               tr.get("device"),
+            "num_epochs_completed": tr.get("num_epochs_completed"),
+            "final_train_loss":     tr.get("final_train_loss"),
+            "training_time_seconds": tr.get("training_time_seconds"),
+            "accuracy":             tr.get("accuracy"),
+            "f1":                   tr.get("f1"),
+            "precision":            tr.get("precision"),
+            "recall":               tr.get("recall"),
+            "ece":                  tr.get("ece"),
+            "per_class_f1":         _trim_per_class_f1(tr.get("per_class_f1", {})),
+            "num_labels":           tr.get("num_labels"),
+            "label_names":          (tr.get("label_names") or [])[:_SUMMARY_MAX_CLASSES],
+            "train_samples":        tr.get("train_samples"),
+            "eval_samples":         tr.get("eval_samples"),
+            "warnings":             tr.get("warnings", []),
+            "loss_history_tail":    loss_history_tail,  # last 5 epochs only
+        },
+        "eval_result": {
+            "evaluation_grade": ev.get("evaluation_grade"),
+            "summary":          ev.get("summary", ""),
+            "concerns":         ev.get("concerns", []),
+            "next_steps":       ev.get("next_steps", []),
+        } if ev else {},
+    }
+
+
+# Truncate label_distribution to this many entries in LLM prompts (saves tokens for many-class tasks)
+_SUMMARY_MAX_CLASSES = 10
+
+
 def _build_pipeline_summary(metrics: list[StageMetrics]) -> dict[str, Any]:
     """Aggregate per-stage StageMetrics into a pipeline-level cost/token summary."""
     if not metrics:
@@ -188,6 +272,20 @@ def _build_pipeline_summary(metrics: list[StageMetrics]) -> dict[str, Any]:
         "llm_stages_called": len(metrics),
         "per_stage": [_metrics_to_dict(m) for m in metrics],
     }
+
+
+def _trim_per_class_f1(per_class: dict[str, float]) -> dict[str, float]:
+    """Return at most 10 per-class F1 entries: worst 5 + best 5.
+    These are most diagnostic for the eval agent — weakest classes drive concerns,
+    strongest drive strengths.  For ≤ 10 classes, returns the full dict."""
+    if len(per_class) <= _SUMMARY_MAX_CLASSES:
+        return per_class
+    sorted_items = sorted(per_class.items(), key=lambda x: x[1])
+    worst = sorted_items[:5]
+    best  = sorted_items[-5:]
+    seen  = {k for k, _ in worst}
+    combined = dict(worst + [item for item in best if item[0] not in seen])
+    return combined
 
 
 def _metrics_to_dict(m: StageMetrics) -> dict[str, Any]:

@@ -12,6 +12,9 @@ import logging
 from .base import BaseAgent, AgentContext, AgentResult, SONNET
 from .schemas import EvalReport
 
+# Keep prompts compact for many-class classification tasks
+_MAX_CLASSES_IN_PROMPT = 10
+
 logger = logging.getLogger(__name__)
 
 SYSTEM = """You are the Eval Agent for ModelForge, an AI model training platform.
@@ -83,8 +86,18 @@ def _build_prompt(context: AgentContext) -> str:
 
     label_names = tr.get("label_names", spec.get("label_names") or [])
     per_class = tr.get("per_class_f1", {})
-    label_distribution = profile.get("label_distribution", {})
     issues = profile.get("issues", [])
+
+    # Truncate to top-N classes to keep prompt compact for many-class datasets
+    raw_dist = profile.get("label_distribution", {})
+    if len(raw_dist) > _MAX_CLASSES_IN_PROMPT:
+        top = dict(sorted(raw_dist.items(), key=lambda x: x[1], reverse=True)[:_MAX_CLASSES_IN_PROMPT])
+        top[f"… {len(raw_dist) - _MAX_CLASSES_IN_PROMPT} more classes"] = sum(
+            v for k, v in raw_dist.items() if k not in top
+        )
+        label_distribution = top
+    else:
+        label_distribution = raw_dist
     all_warnings = tr.get("warnings", [])
 
     return json.dumps({
