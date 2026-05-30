@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import { LossCurve, type EpochPoint } from "./loss-curve"
+import { PipelineDAG } from "@/components/pipeline-dag"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const LS_KEY = "modelforge_sessions_v2"
@@ -876,30 +877,15 @@ function TrainingColumn({
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Progress bar */}
+            {/* Pipeline DAG visualization — replaces the old pill-based progress */}
             <div className="space-y-2">
               <div className="flex justify-between text-xs">
                 <span>{streaming ? "Pipeline running…" : session.status === "completed" ? "Completed" : "Failed"}</span>
                 <span className="text-muted-foreground">{completed.length} / {AGENT_ORDER.length}</span>
               </div>
               <Progress value={progress} className="h-2" />
-              <div className="flex gap-1.5 flex-wrap">
-                {AGENT_ORDER.map(name => {
-                  const done   = completed.includes(name)
-                  const active = activeAgent === name
-                  return (
-                    <div key={name} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md ${
-                      done   ? "bg-emerald-500/10 text-emerald-400" :
-                      active ? "bg-primary/10 text-primary animate-pulse" :
-                               "bg-secondary/50 text-muted-foreground"
-                    }`}>
-                      {done   ? <CheckCircle2 className="h-2.5 w-2.5" /> :
-                       active ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> :
-                                <div className="h-2.5 w-2.5 rounded-full border border-current opacity-30" />}
-                      {name}
-                    </div>
-                  )
-                })}
+              <div className="rounded-xl border border-border bg-secondary/20 p-3">
+                <PipelineDAG messages={messages} streaming={streaming} />
               </div>
             </div>
 
