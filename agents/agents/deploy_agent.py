@@ -486,6 +486,18 @@ class DeployAgent(BaseAgent):
         per_class = tr.get("per_class_f1", {})
         label_names = tr.get("label_names", spec.get("label_names") or [])
 
+        # Truncate label_distribution for prompt compactness on many-class datasets
+        _MAX_CLASSES = 10
+        raw_dist = profile.get("label_distribution", {})
+        if len(raw_dist) > _MAX_CLASSES:
+            top_dist = dict(sorted(raw_dist.items(), key=lambda x: x[1], reverse=True)[:_MAX_CLASSES])
+            top_dist[f"… {len(raw_dist) - _MAX_CLASSES} more"] = sum(
+                v for k, v in raw_dist.items() if k not in top_dist
+            )
+            label_distribution = top_dist
+        else:
+            label_distribution = raw_dist
+
         payload = json.dumps({
             "repo_id": repo_id,
             "user_intent": context.user_intent,
@@ -503,7 +515,7 @@ class DeployAgent(BaseAgent):
                 "eval_samples":  tr.get("eval_samples"),
                 "num_classes":   tr.get("num_labels"),
                 "label_names":   label_names,
-                "label_distribution": profile.get("label_distribution", {}),
+                "label_distribution": label_distribution,
             },
             "metrics": {
                 "accuracy":    tr.get("accuracy"),
