@@ -22,6 +22,7 @@ from .base import BaseAgent, AgentContext, AgentResult, SONNET
 from .model_catalog import catalog_summary_for_prompt
 from .schemas import ModelRecipe, HPOSearchSpace
 from .validators import validate_recipe_semantics
+from .cache import recipe_cache
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,17 @@ class ModelAgent(BaseAgent):
             result = _recipe_result(context.model_recipe)
             if val_result.warnings:
                 result.metadata["validation_warnings"] = val_result.warnings
+            return result
+
+        # ── Cache check: skip LLM if a quality recipe for similar dataset exists ──
+        task_type = str(context.task_spec.get("task_type", "text_classification"))
+        cached = recipe_cache.get(profile, task_type)
+        if cached:
+            context.model_recipe = cached.model_recipe
+            result = _recipe_result(context.model_recipe)
+            result.metadata["cache_hit"] = True
+            result.metadata["cached_grade"] = cached.eval_grade
+            logger.info("ModelAgent: cache HIT — skipping LLM call (cached grade %s)", cached.eval_grade)
             return result
 
         catalog = catalog_summary_for_prompt()
