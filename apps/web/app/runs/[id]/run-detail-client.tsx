@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import type { Run, RunEvent } from "@/lib/supabase/types"
+import { DetailedAnalysis } from "@/components/detailed-analysis"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -832,6 +833,22 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
           </Card>
         </div>
       )}
+
+      {/* Detailed Analysis — confusion matrix + per-class metrics */}
+      {(() => {
+        const m = (run.metrics ?? {}) as Record<string, unknown>
+        const labelNames      = Array.isArray(m.label_names) ? m.label_names as string[] : []
+        const confusionMatrix = Array.isArray(m.confusion_matrix) ? m.confusion_matrix as number[][] : null
+        const perClassMetrics = m.per_class_metrics as Record<string, { precision: number; recall: number; f1: number; support: number }> | null
+        if (!labelNames.length) return null
+        return (
+          <DetailedAnalysis
+            labelNames={labelNames}
+            confusionMatrix={confusionMatrix}
+            perClassMetrics={perClassMetrics}
+          />
+        )
+      })()}
 
       {/* Deploy Section */}
       <DeploySection run={run} />
