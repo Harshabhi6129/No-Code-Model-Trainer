@@ -9,7 +9,7 @@ import {
   Database, BrainCircuit, Cpu, BarChart3, Rocket,
   AlertTriangle, RefreshCw, FileText, Copy, Check,
   ChevronDown, ChevronUp, Zap, ExternalLink, Info,
-  Download, DollarSign, Sparkles,
+  Download, DollarSign, Sparkles, Loader2, Star,
 } from "lucide-react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -289,6 +289,218 @@ function RetrainButton({ run }: { run: Run }) {
     <Button variant="outline" size="sm" onClick={handleRetrain} className="gap-2">
       <RefreshCw className="h-3.5 w-3.5" /> Retrain with tweaks
     </Button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sweep Modal
+// ---------------------------------------------------------------------------
+
+const LR_PRESETS    = [1e-5, 2e-5, 3e-5, 5e-5]
+const BATCH_PRESETS = [8, 16, 32, 64]
+const EPOCH_PRESETS = [3, 5, 8]
+const LORA_PRESETS  = [8, 16, 32]
+const SWEEP_MAX     = 12
+
+function SweepModal({ run, onClose }: { run: Run; onClose: () => void }) {
+  const router = useRouter()
+  const recipe = asRecord(run.model_recipe)
+  const intent = asRecord(run.intent_spec)
+  const isLora = ["lora", "qlora"].includes(String(recipe.training_approach ?? ""))
+
+  const currentLR    = Number(recipe.learning_rate ?? 2e-5)
+  const currentBatch = Number(recipe.batch_size    ?? 16)
+  const currentEpoch = Number(recipe.num_epochs    ?? 3)
+  const currentLoraR = Number(recipe.lora_r        ?? 8)
+
+  const [lrSel,    setLrSel]    = useState<Set<number>>(new Set([currentLR]))
+  const [batchSel, setBatchSel] = useState<Set<number>>(new Set([currentBatch]))
+  const [epochSel, setEpochSel] = useState<Set<number>>(new Set([currentEpoch]))
+  const [loraSel,  setLoraSel]  = useState<Set<number>>(new Set([currentLoraR]))
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+
+  function toggle<T>(set: Set<T>, val: T): Set<T> {
+    const next = new Set(set)
+    if (next.has(val)) { if (next.size > 1) next.delete(val) }
+    else next.add(val)
+    return next
+  }
+
+  const combos =
+    lrSel.size * batchSel.size *
+    (epochSel.size || 1) *
+    (isLora ? loraSel.size : 1)
+  const overLimit = combos > SWEEP_MAX
+
+  async function launchSweep() {
+    setLoading(true); setError(null)
+    try {
+      const res = await fetch(`${API_URL}/sweep`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: typeof intent.user_intent === "string"
+            ? intent.user_intent
+            : `Train a ${run.task_type?.replace(/_/g, " ")} model`,
+          file_id:        null,
+          hf_token:       localStorage.getItem("modelforge_hf_token") ?? null,
+          parent_run_id:  run.id,
+          hyperparameter_overrides: {
+            model_id:          String(recipe.base_model ?? "roberta-base"),
+            training_approach: String(recipe.training_approach ?? "full_finetune"),
+            max_length:        Number(recipe.max_length ?? 128),
+            weight_decay:      Number(recipe.weight_decay ?? 0.01),
+            warmup_ratio:      Number(recipe.warmup_ratio ?? 0.1),
+          },
+          sweep_config: {
+            lr_values:     Array.from(lrSel),
+            batch_values:  Array.from(batchSel),
+            epoch_values:  Array.from(epochSel),
+            lora_r_values: isLora ? Array.from(loraSel) : [],
+          },
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: "Sweep failed" }))
+        throw new Error(body.detail ?? "Sweep failed")
+      }
+      const data = await res.json()
+      void data  // sweep_id available for future use
+      router.push("/runs")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function CheckRow<T extends number>({
+    label, presets, selected, setSelected, fmt,
+  }: {
+    label: string
+    presets: T[]
+    selected: Set<T>
+    setSelected: (s: Set<T>) => void
+    fmt: (v: T) => string
+  }) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <div className="flex flex-wrap gap-2">
+          {presets.map(v => {
+            const on = selected.has(v)
+            return (
+              <button
+                key={String(v)}
+                onClick={() => setSelected(toggle(selected, v))}
+                className={`px-2.5 py-1 rounded-md border text-[11px] font-mono font-medium transition-all ${
+                  on ? "border-primary bg-primary/10 text-primary"
+                     : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                }`}
+              >
+                {fmt(v)}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div
+        className="relative w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl p-6 space-y-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2">
+          <Zap className="h-5 w-5 text-violet-400" />
+          <h2 className="text-base font-bold">Launch Hyperparameter Sweep</h2>
+          <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground transition-colors">
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Select values for each parameter. ModelForge will train one run per combination in parallel and rank them by F1.
+        </p>
+
+        <div className="space-y-4">
+          <CheckRow
+            label="Learning Rate"
+            presets={LR_PRESETS}
+            selected={lrSel}
+            setSelected={setLrSel}
+            fmt={v => v.toExponential(0)}
+          />
+          <CheckRow
+            label="Batch Size"
+            presets={BATCH_PRESETS}
+            selected={batchSel}
+            setSelected={setBatchSel}
+            fmt={v => String(v)}
+          />
+          <CheckRow
+            label="Epochs"
+            presets={EPOCH_PRESETS}
+            selected={epochSel}
+            setSelected={setEpochSel}
+            fmt={v => String(v)}
+          />
+          {isLora && (
+            <CheckRow
+              label="LoRA Rank"
+              presets={LORA_PRESETS}
+              selected={loraSel}
+              setSelected={setLoraSel}
+              fmt={v => `r=${v}`}
+            />
+          )}
+        </div>
+
+        {/* Run count indicator */}
+        <div className={`flex items-center gap-2 p-3 rounded-lg border text-xs font-mono ${
+          overLimit
+            ? "bg-destructive/10 border-destructive/30 text-destructive"
+            : "bg-secondary/50 border-border text-foreground"
+        }`}>
+          <Zap className="h-3.5 w-3.5 shrink-0" />
+          <span>{combos} run{combos !== 1 ? "s" : ""} total</span>
+          {overLimit && <span className="ml-1 text-destructive">(max {SWEEP_MAX})</span>}
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-xs text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            {error}
+          </div>
+        )}
+
+        <Button
+          onClick={launchSweep}
+          disabled={loading || overLimit || combos < 2}
+          className="w-full gap-2"
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+          {loading ? `Launching ${combos} runs…` : `Start Sweep (${combos} runs)`}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function SweepLaunchButton({ run }: { run: Run }) {
+  const [open, setOpen] = useState(false)
+  if (run.status !== "completed") return null
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)} className="gap-2">
+        <Zap className="h-3.5 w-3.5 text-violet-400" /> Launch Sweep
+      </Button>
+      {open && <SweepModal run={run} onClose={() => setOpen(false)} />}
+    </>
   )
 }
 
@@ -979,6 +1191,7 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
         </div>
         <div className="flex gap-2 flex-wrap">
           <RetrainButton run={run} />
+          <SweepLaunchButton run={run} />
           {run.status === "completed" && run.hf_model_url && (
             <Button asChild size="sm">
               <a href={run.hf_model_url} target="_blank" rel="noreferrer">

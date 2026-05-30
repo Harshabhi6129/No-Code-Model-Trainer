@@ -10,6 +10,7 @@ import {
   ArrowRight, GitCompare, ListOrdered, Filter,
 } from "lucide-react"
 import type { Run } from "@/lib/supabase/types"
+import { SweepGroup } from "./sweep-group"
 
 /* ── Status config ──────────────────────────────────────────────── */
 const statusCfg: Record<string, {
@@ -141,10 +142,25 @@ export default async function RunsPage() {
     .order("created_at", { ascending: false })
 
   const allRuns   = (runs ?? []) as Run[]
-  const completed = allRuns.filter((r) => r.status === "completed").length
-  const running   = allRuns.filter((r) => r.status === "running").length
-  const pending   = allRuns.filter((r) => r.status === "pending").length
-  const failed    = allRuns.filter((r) => r.status === "failed").length
+
+  // Separate sweep child runs from standalone runs
+  const sweepMap = new Map<string, Run[]>()
+  const standaloneRuns: Run[] = []
+  for (const run of allRuns) {
+    if (run.sweep_id) {
+      const group = sweepMap.get(run.sweep_id) ?? []
+      group.push(run)
+      sweepMap.set(run.sweep_id, group)
+    } else {
+      standaloneRuns.push(run)
+    }
+  }
+  const sweepGroups = Array.from(sweepMap.values())
+
+  const completed = standaloneRuns.filter((r) => r.status === "completed").length
+  const running   = standaloneRuns.filter((r) => r.status === "running").length
+  const pending   = standaloneRuns.filter((r) => r.status === "pending").length
+  const failed    = standaloneRuns.filter((r) => r.status === "failed").length
 
   return (
     <AppShell>
@@ -152,7 +168,7 @@ export default async function RunsPage() {
         icon={ListOrdered}
         iconColor="text-amber-400"
         title="All Runs"
-        description={`${allRuns.length} training run${allRuns.length !== 1 ? "s" : ""} total`}
+        description={`${allRuns.length} run${allRuns.length !== 1 ? "s" : ""} total${sweepGroups.length > 0 ? ` · ${sweepGroups.length} sweep${sweepGroups.length !== 1 ? "s" : ""}` : ""}`}
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" asChild>
@@ -187,13 +203,31 @@ export default async function RunsPage() {
           </div>
         )}
 
-        {/* Runs list */}
+        {/* Sweep groups (collapsed by default, shown before standalone runs) */}
+        {sweepGroups.length > 0 && (
+          <div className="space-y-0">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Sweeps</span>
+              <span className="font-mono text-[10px] text-muted-foreground/50">{sweepGroups.length}</span>
+            </div>
+            <div
+              className="rounded-xl border border-border overflow-hidden"
+              style={{ background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}
+            >
+              {sweepGroups.map((group) => (
+                <SweepGroup key={group[0]?.sweep_id} runs={group} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Standalone runs list */}
         <div
           className="rounded-xl border border-border overflow-hidden"
           style={{ background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}
         >
           {/* Column header row */}
-          {allRuns.length > 0 && (
+          {standaloneRuns.length > 0 && (
             <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-4 px-6 py-2.5 border-b border-border/60 bg-surface-elevated/25">
               <span className="w-4" />
               <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/45 font-mono">
@@ -235,8 +269,12 @@ export default async function RunsPage() {
                 </Link>
               </Button>
             </div>
+          ) : standaloneRuns.length === 0 && sweepGroups.length > 0 ? (
+            <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+              All runs are part of sweeps above.
+            </div>
           ) : (
-            allRuns.map((run, i) => <RunRow key={run.id} run={run} index={i} />)
+            standaloneRuns.map((run, i) => <RunRow key={run.id} run={run} index={i} />)
           )}
         </div>
       </div>

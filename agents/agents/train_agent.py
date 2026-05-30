@@ -40,7 +40,9 @@ _KEEPALIVE_INTERVAL = 20   # seconds between keepalive SSE events
 _TRAINING_TIMEOUT   = 3600 # hard cap: 60 minutes
 
 # Registry: run_id → (asyncio.Task, cancel_event, pause_event)
+# Protected by _runs_lock so concurrent sweep child runs don't race on dict access.
 _active_runs: dict[str, tuple["asyncio.Task[Any]", threading.Event, threading.Event]] = {}
+_runs_lock   = threading.RLock()
 
 
 class TrainAgent(BaseAgent):
@@ -276,7 +278,8 @@ class TrainAgent(BaseAgent):
                 )
             )
         if context.run_id:
-            _active_runs[context.run_id] = (training_task, cancel_event, pause_event)
+            with _runs_lock:
+                _active_runs[context.run_id] = (training_task, cancel_event, pause_event)
 
         # ── Keepalive loop ────────────────────────────────────────────────────
         while not training_task.done():
@@ -330,7 +333,8 @@ class TrainAgent(BaseAgent):
 
         # ── Resolve result ────────────────────────────────────────────────────
         # Unblock any paused thread before removing from registry
-        entry = _active_runs.pop(context.run_id, None)
+        with _runs_lock:
+            entry = _active_runs.pop(context.run_id, None)
         if entry is not None:
             entry[2].set()  # ensure pause_event is set so thread doesn't hang
 
@@ -444,7 +448,8 @@ class TrainAgent(BaseAgent):
 
 def cancel_run(run_id: str) -> bool:
     """Signal the active run to stop at the next step boundary."""
-    entry = _active_runs.get(run_id)
+    with _runs_lock:
+        entry = _active_runs.get(run_id)
     if entry is None:
         return False
     _task, cancel_event, pause_event = entry
@@ -456,7 +461,8 @@ def cancel_run(run_id: str) -> bool:
 
 def pause_run(run_id: str) -> bool:
     """Block training at the next step boundary."""
-    entry = _active_runs.get(run_id)
+    with _runs_lock:
+        entry = _active_runs.get(run_id)
     if entry is None:
         return False
     _task, _cancel, pause_event = entry
@@ -467,7 +473,8 @@ def pause_run(run_id: str) -> bool:
 
 def resume_run(run_id: str) -> bool:
     """Unblock a paused training run."""
-    entry = _active_runs.get(run_id)
+    with _runs_lock:
+        entry = _active_runs.get(run_id)
     if entry is None:
         return False
     _task, _cancel, pause_event = entry
@@ -478,7 +485,8 @@ def resume_run(run_id: str) -> bool:
 
 def is_paused(run_id: str) -> bool:
     """Return True if the run's pause_event is cleared (blocked)."""
-    entry = _active_runs.get(run_id)
+    with _runs_lock:
+        entry = _active_runs.get(run_id)
     if entry is None:
         return False
     _task, _cancel, pause_event = entry

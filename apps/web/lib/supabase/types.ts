@@ -16,6 +16,7 @@ export interface Database {
           artifact_path: string | null; hf_model_url: string | null; error_message: string | null
           created_at: string; completed_at: string | null
           model_card: string | null; deploy_status: string | null; hf_repo_id: string | null
+          sweep_id: string | null; parent_run_id: string | null; sweep_config: Json | null
         }
         Insert: {
           id?: string; user_id: string; status?: string; task_type?: string | null
@@ -24,6 +25,7 @@ export interface Database {
           artifact_path?: string | null; hf_model_url?: string | null; error_message?: string | null
           created_at?: string; completed_at?: string | null
           model_card?: string | null; deploy_status?: string | null; hf_repo_id?: string | null
+          sweep_id?: string | null; parent_run_id?: string | null; sweep_config?: Json | null
         }
         Update: {
           id?: string; user_id?: string; status?: string; task_type?: string | null
@@ -32,6 +34,7 @@ export interface Database {
           artifact_path?: string | null; hf_model_url?: string | null; error_message?: string | null
           created_at?: string; completed_at?: string | null
           model_card?: string | null; deploy_status?: string | null; hf_repo_id?: string | null
+          sweep_id?: string | null; parent_run_id?: string | null; sweep_config?: Json | null
         }
       }
       run_events: {

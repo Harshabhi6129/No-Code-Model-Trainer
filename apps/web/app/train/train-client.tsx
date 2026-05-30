@@ -96,6 +96,13 @@ interface PipelineCost {
   elapsedS: number
 }
 
+interface SweepRanges {
+  lrValues:    number[]
+  batchValues: number[]
+  epochValues: number[]
+  loraRValues: number[]
+}
+
 interface TrainingSession {
   id: string
   label: string
@@ -114,6 +121,8 @@ interface TrainingSession {
   errorMessage: string | null
   epochMetrics: EpochPoint[]
   pipelineCost: PipelineCost | null
+  isSweep: boolean
+  sweepRanges: SweepRanges
   // HITL: set when IntentAgent requests clarification (confidence < 0.7)
   clarificationQuestion: string | null
 }
@@ -212,6 +221,8 @@ function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession 
     errorMessage: null,
     epochMetrics: [],
     pipelineCost: null,
+    isSweep: false,
+    sweepRanges: { lrValues: [2e-5], batchValues: [16], epochValues: [3], loraRValues: [8] },
     clarificationQuestion: null,
     ...overrides,
   }
@@ -269,24 +280,34 @@ function reducer(state: WsState, action: Action): WsState {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function SessionSidebar({
-  sessions, activeId, onSelect, onAdd,
+  sessions, activeId, onSelect, onAdd, onAddSweep,
 }: {
   sessions: TrainingSession[]
   activeId: string | null
   onSelect: (id: string) => void
   onAdd: () => void
+  onAddSweep: () => void
 }) {
   return (
     <div className="w-52 shrink-0 flex flex-col border-r border-border bg-card/50 h-full">
       <div className="flex items-center justify-between px-3 py-3 border-b border-border">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sessions</span>
-        <button
-          onClick={onAdd}
-          className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-          title="New session"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onAddSweep}
+            className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-violet-500/15 text-violet-400 hover:text-violet-300 transition-colors"
+            title="New hyperparameter sweep"
+          >
+            <Zap className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={onAdd}
+            className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+            title="New training session"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -308,9 +329,12 @@ function SessionSidebar({
             >
               <div className="flex items-center justify-between gap-1 mb-0.5">
                 <span className="text-xs font-medium truncate">{s.label}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${badge.cls}`}>
-                  {badge.label}
-                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  {s.isSweep && <Zap className="h-3 w-3 text-violet-400" />}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${badge.cls}`}>
+                    {badge.label}
+                  </span>
+                </div>
               </div>
               {s.uploadResult && (
                 <p className="text-[10px] text-muted-foreground truncate">{s.uploadResult.filename}</p>
@@ -699,6 +723,182 @@ function ConfigurePanel({
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Sweep Config Panel
+// ──────────────────────────────────────────────────────────────────────────────
+
+const SWEEP_LR_PRESETS    = [1e-5, 2e-5, 3e-5, 5e-5]
+const SWEEP_BATCH_PRESETS = [8, 16, 32, 64]
+const SWEEP_EPOCH_PRESETS = [3, 5, 8]
+const SWEEP_LORA_PRESETS  = [8, 16, 32]
+const SWEEP_MAX_RUNS      = 12
+const API_URL_SWEEP       = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+
+function SweepConfigPanel({
+  session, onUpdate,
+}: {
+  session: TrainingSession
+  onUpdate: (patch: Partial<TrainingSession>) => void
+}) {
+  const router = useRouter()
+  const ranges = session.sweepRanges
+  const isLora = ["lora", "qlora"].includes(session.hyperParams.training_approach)
+  const [launching, setLaunching] = useState(false)
+  const [launchError, setLaunchError] = useState<string | null>(null)
+
+  function toggleVal<T extends number>(key: keyof SweepRanges, val: T) {
+    const cur = new Set(ranges[key] as T[])
+    if (cur.has(val)) { if (cur.size > 1) cur.delete(val) } else cur.add(val)
+    onUpdate({ sweepRanges: { ...ranges, [key]: Array.from(cur) } })
+  }
+
+  const combos =
+    ranges.lrValues.length * ranges.batchValues.length *
+    (ranges.epochValues.length || 1) *
+    (isLora ? ranges.loraRValues.length : 1)
+  const overLimit = combos > SWEEP_MAX_RUNS
+
+  function PresetRow<T extends number>({
+    label, presets, key, fmt,
+  }: {
+    label: string
+    presets: T[]
+    key: keyof SweepRanges
+    fmt: (v: T) => string
+  }) {
+    const sel = new Set(ranges[key] as T[])
+    return (
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">{label}</label>
+        <div className="flex flex-wrap gap-1.5">
+          {presets.map(v => {
+            const on = sel.has(v)
+            return (
+              <button
+                key={String(v)}
+                onClick={() => toggleVal(key, v)}
+                className={`px-2 py-1 rounded border text-[11px] font-mono transition-all ${
+                  on ? "border-primary bg-primary/10 text-primary font-semibold"
+                     : "border-border text-muted-foreground hover:border-primary/40"
+                }`}
+              >
+                {fmt(v)}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  async function launchSweep() {
+    if (!session.uploadResult || overLimit || combos < 2) return
+    setLaunching(true); setLaunchError(null)
+    try {
+      const res = await fetch(`${API_URL_SWEEP}/sweep`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: session.intent.trim() || `Train a ${session.hyperParams.task_type.replace(/_/g, " ")} model`,
+          file_id: session.uploadResult.file_id || null,
+          hf_token: localStorage.getItem("modelforge_hf_token") ?? null,
+          parent_run_id: session.runId ?? null,
+          hyperparameter_overrides: {
+            model_id:          session.selectedModelId,
+            training_approach: session.hyperParams.training_approach,
+            max_length:        session.hyperParams.max_length,
+            weight_decay:      session.hyperParams.weight_decay,
+            warmup_ratio:      session.hyperParams.warmup_ratio,
+          },
+          sweep_config: {
+            lr_values:     ranges.lrValues,
+            batch_values:  ranges.batchValues,
+            epoch_values:  ranges.epochValues,
+            lora_r_values: isLora ? ranges.loraRValues : [],
+          },
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: "Sweep failed" }))
+        throw new Error(body.detail ?? "Sweep failed")
+      }
+      toast.success(`Sweep started — ${combos} runs launching`)
+      router.push("/runs")
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLaunching(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-2 p-3 rounded-lg bg-violet-500/8 border border-violet-500/25">
+        <Zap className="h-4 w-4 text-violet-400 shrink-0" />
+        <div>
+          <p className="text-xs font-semibold text-foreground">Hyperparameter Sweep</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            Train one run per param combination in parallel. Best result auto-highlighted.
+          </p>
+        </div>
+      </div>
+
+      {/* Dataset */}
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-muted-foreground">Dataset</label>
+        {session.uploadResult ? (
+          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/8 border border-emerald-500/25 text-xs">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+            <span className="font-mono text-foreground">{session.uploadResult.filename}</span>
+            <span className="text-muted-foreground">{session.uploadResult.rows.toLocaleString()} rows</span>
+          </div>
+        ) : (
+          <div className="p-2.5 rounded-lg bg-secondary/50 border border-border text-xs text-muted-foreground">
+            Upload a dataset in the Setup tab first, then switch to Sweep.
+          </div>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* Param pickers */}
+      <PresetRow label="Learning Rate"  presets={SWEEP_LR_PRESETS}    key="lrValues"    fmt={v => v.toExponential(0)} />
+      <PresetRow label="Batch Size"     presets={SWEEP_BATCH_PRESETS}  key="batchValues" fmt={v => String(v)} />
+      <PresetRow label="Epochs"         presets={SWEEP_EPOCH_PRESETS}  key="epochValues" fmt={v => String(v)} />
+      {isLora && (
+        <PresetRow label="LoRA Rank"   presets={SWEEP_LORA_PRESETS}   key="loraRValues" fmt={v => `r=${v}`} />
+      )}
+
+      {/* Run count */}
+      <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${
+        overLimit
+          ? "bg-destructive/10 border-destructive/30 text-destructive"
+          : "bg-secondary/50 border-border"
+      }`}>
+        <Zap className="h-3.5 w-3.5 shrink-0" />
+        <span>{combos} run{combos !== 1 ? "s" : ""} total</span>
+        {overLimit && <span className="text-destructive ml-1">(max {SWEEP_MAX_RUNS})</span>}
+      </div>
+
+      {launchError && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-destructive/10 border border-destructive/30 text-xs text-destructive">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          {launchError}
+        </div>
+      )}
+
+      <Button
+        onClick={launchSweep}
+        disabled={launching || overLimit || combos < 2 || !session.uploadResult}
+        className="w-full gap-2"
+      >
+        {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+        {launching ? `Launching ${combos} runs…` : `Launch Sweep (${combos} runs)`}
+      </Button>
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Setup Column
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -779,7 +979,9 @@ function SetupColumn({
 
       {/* Column content */}
       <div className="flex-1 overflow-y-auto p-4">
-        {isLocked ? (
+        {session.isSweep ? (
+          <SweepConfigPanel session={session} onUpdate={onUpdate} />
+        ) : isLocked ? (
           <SetupSummary session={session} />
         ) : subStep === "upload" ? (
           <div className="space-y-4">
@@ -1383,6 +1585,16 @@ export function TrainClient() {
     dispatch({ type: "SELECT", id: session.id })
   }
 
+  function addSweepSession() {
+    const session = makeSession({
+      label:   "New Sweep",
+      isSweep: true,
+      sweepRanges: { lrValues: [1e-5, 2e-5, 3e-5], batchValues: [16, 32], epochValues: [3], loraRValues: [8] },
+    })
+    dispatch({ type: "ADD", session })
+    dispatch({ type: "SELECT", id: session.id })
+  }
+
   function updateSession(id: string, patch: Partial<TrainingSession>) {
     dispatch({ type: "UPDATE", id, patch })
   }
@@ -1741,6 +1953,7 @@ export function TrainClient() {
         activeId={state.activeId}
         onSelect={id => dispatch({ type: "SELECT", id })}
         onAdd={addSession}
+        onAddSweep={addSweepSession}
       />
       <div className="flex-1 overflow-hidden">
         {activeSession ? (

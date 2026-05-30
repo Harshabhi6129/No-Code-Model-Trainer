@@ -566,6 +566,225 @@ async def resume_training(run_id: str) -> dict[str, str]:
     return {"status": "resumed", "run_id": run_id}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Hyperparameter Sweep
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SWEEP_MAX_RUNS = 12  # hard cap to prevent runaway sweeps
+
+
+class SweepConfig(BaseModel):
+    lr_values:     list[float] = []
+    batch_values:  list[int]   = []
+    epoch_values:  list[int]   = []
+    lora_r_values: list[int]   = []
+
+
+class SweepRequest(BaseModel):
+    message:                  str
+    file_id:                  str | None = None
+    hf_token:                 str | None = None
+    parent_run_id:            str | None = None
+    hyperparameter_overrides: dict[str, Any] = {}
+    sweep_config:             SweepConfig
+
+    @field_validator("message")
+    @classmethod
+    def message_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message cannot be empty")
+        return v.strip()
+
+
+def _build_sweep_combos(cfg: SweepConfig, base: dict[str, Any]) -> list[dict[str, Any]]:
+    """Cartesian product of all non-empty sweep_config lists merged into base overrides."""
+    import itertools
+
+    axes: list[tuple[str, list[Any]]] = []
+    if cfg.lr_values:
+        axes.append(("learning_rate", cfg.lr_values))
+    if cfg.batch_values:
+        axes.append(("batch_size", cfg.batch_values))
+    if cfg.epoch_values:
+        axes.append(("num_epochs", cfg.epoch_values))
+    if cfg.lora_r_values:
+        axes.append(("lora_r", cfg.lora_r_values))
+
+    if not axes:
+        return [dict(base)]
+
+    keys   = [k for k, _ in axes]
+    values = [v for _, v in axes]
+    return [
+        {**base, **dict(zip(keys, combo))}
+        for combo in itertools.product(*values)
+    ]
+
+
+async def _run_sweep_child(
+    run_id: str,
+    message: str,
+    dataset_path: str | None,
+    overrides: dict[str, Any],
+    hf_token: str | None,
+    sweep_id: str,
+    sweep_config_combo: dict[str, Any],
+) -> None:
+    """Train one child run of a sweep. Updates Supabase run record on completion."""
+    _agents_import()
+    from agents.pipeline import TrainingPipeline
+    from services.run_event_writer import write_agent_event, write_pipeline_checkpoint
+
+    supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    sb = None
+    if supabase_url and supabase_key:
+        try:
+            from supabase import create_client
+            sb = create_client(supabase_url, supabase_key)
+        except Exception:
+            pass
+
+    if sb:
+        sb.table("runs").update({"status": "running"}).eq("id", run_id).execute()
+
+    all_results: list[Any] = []
+    pipeline_success = True
+    try:
+        pipeline = TrainingPipeline()
+        async for result, context in pipeline.run_streaming(
+            user_intent=message,
+            dataset_path=dataset_path,
+            hyperparameter_overrides=overrides,
+            hf_token=hf_token,
+            run_id=run_id,
+        ):
+            all_results.append(result)
+            await write_agent_event(
+                run_id=run_id,
+                agent_name=result.agent_name,
+                success=result.success,
+                message=result.message,
+                output=result.output,
+            )
+            if result.success:
+                await write_pipeline_checkpoint(
+                    run_id=run_id,
+                    completed_stages=list(context.completed_stages),
+                    checkpoint_data=pipeline.context_snapshot(context),
+                )
+            if not result.success:
+                pipeline_success = False
+                break
+    except Exception as exc:
+        logger.error("[sweep][%s] child run error: %s", run_id, exc, exc_info=True)
+        pipeline_success = False
+
+    if sb:
+        intent_out = next((r.output for r in all_results if r.agent_name == "Intent"), {})
+        model_out  = next((r.output for r in all_results if r.agent_name == "Model"),  {})
+        train_out  = next((r.output for r in all_results if r.agent_name == "Train" and r.output.get("final") is not False), {})
+        eval_out   = next((r.output for r in all_results if r.agent_name == "Eval"),   {})
+        m_src      = eval_out if eval_out else train_out
+        try:
+            sb.table("runs").update({
+                "status":        "completed" if pipeline_success else "failed",
+                "task_type":     intent_out.get("task_type"),
+                "model_id":      model_out.get("base_model") or intent_out.get("base_model_hint"),
+                "intent_spec":   intent_out,
+                "model_recipe":  model_out,
+                "metrics": {
+                    "accuracy":         m_src.get("accuracy"),
+                    "f1":               m_src.get("f1"),
+                    "precision":        m_src.get("precision"),
+                    "recall":           m_src.get("recall"),
+                    "evaluation_grade": eval_out.get("evaluation_grade"),
+                    "difficulty_tier":  eval_out.get("difficulty_tier"),
+                    "grade_rationale":  eval_out.get("grade_rationale"),
+                    "summary":          eval_out.get("summary"),
+                    "strengths":        eval_out.get("strengths"),
+                    "concerns":         eval_out.get("concerns"),
+                    "next_steps":       eval_out.get("next_steps"),
+                },
+                "artifact_path": train_out.get("artifact_path"),
+                "sweep_config":  sweep_config_combo,
+                "completed_at":  "now()",
+            }).eq("id", run_id).execute()
+        except Exception as exc:
+            logger.warning("[sweep][%s] failed to update run record: %s", run_id, exc)
+
+
+@app.post("/sweep")
+async def launch_sweep(req: SweepRequest) -> dict[str, Any]:
+    """
+    Launch N parallel training runs with different hyperparameter combos.
+
+    Returns immediately with sweep_id and run_ids.
+    Each child run updates its Supabase row when it completes.
+    """
+    combos = _build_sweep_combos(req.sweep_config, req.hyperparameter_overrides)
+    if not combos:
+        raise HTTPException(400, "sweep_config must specify at least one parameter list (lr_values, batch_values, epoch_values, or lora_r_values)")
+    if len(combos) > _SWEEP_MAX_RUNS:
+        raise HTTPException(
+            400,
+            f"Sweep would produce {len(combos)} runs (max {_SWEEP_MAX_RUNS}). "
+            "Reduce the number of values per parameter."
+        )
+
+    sweep_id     = str(uuid.uuid4())
+    dataset_path = _resolve_file_id(req.file_id)
+
+    # Create one Supabase run row per combo
+    supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    sb = None
+    if supabase_url and supabase_key:
+        try:
+            from supabase import create_client
+            sb = create_client(supabase_url, supabase_key)
+        except Exception:
+            pass
+
+    run_ids: list[str] = []
+    for combo in combos:
+        run_id = str(uuid.uuid4())
+        if sb:
+            try:
+                result = sb.table("runs").insert({
+                    "id":            run_id,
+                    "user_id":       "sweep",      # overridden by frontend-created rows in practice
+                    "status":        "pending",
+                    "sweep_id":      sweep_id,
+                    "parent_run_id": req.parent_run_id,
+                    "sweep_config":  combo,
+                }).execute()
+                # Use the DB-assigned id if available
+                if result.data:
+                    run_id = result.data[0].get("id", run_id)
+            except Exception as exc:
+                logger.warning("[sweep] failed to create run row: %s", exc)
+        run_ids.append(run_id)
+
+    # Fire all child runs concurrently (fire-and-forget)
+    import asyncio as _asyncio
+    for run_id, combo in zip(run_ids, combos):
+        _asyncio.ensure_future(
+            _run_sweep_child(
+                run_id=run_id,
+                message=req.message,
+                dataset_path=dataset_path,
+                overrides=combo,
+                hf_token=req.hf_token,
+                sweep_id=sweep_id,
+                sweep_config_combo=combo,
+            )
+        )
+
+    logger.info("[sweep:%s] launched %d child runs", sweep_id, len(run_ids))
+    return {"sweep_id": sweep_id, "run_ids": run_ids, "total": len(run_ids)}
+
+
 @app.get("/status/{job_id}")
 async def get_status(job_id: str) -> dict[str, Any]:
     """Get the last known status for a WebSocket training job."""
