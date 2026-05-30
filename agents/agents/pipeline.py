@@ -16,6 +16,14 @@ from .deploy_agent import DeployAgent
 from .cache import recipe_cache
 from .memory import episodic_memory
 
+# Import lazily so the agents package stays importable without optional deps
+def _get_tracer_class():
+    try:
+        from services.tracer import PipelineTracer
+        return PipelineTracer
+    except ImportError:
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,6 +83,15 @@ class TrainingPipeline:
         all_stage_metrics: list[StageMetrics] = []
         pipeline_failed = False
 
+        # Start tracer (best-effort — tracing never blocks the pipeline)
+        tracer = None
+        try:
+            TracerClass = _get_tracer_class()
+            if TracerClass is not None:
+                tracer = TracerClass(context.run_id)
+        except Exception as exc:
+            logger.debug("PipelineTracer init error: %s", exc)
+
         for agent in agents:
             # Skip stages already recorded in completed_stages
             if agent.name in context.completed_stages:
@@ -109,6 +126,11 @@ class TrainingPipeline:
             # Collect this agent's last LLM call metrics (None for deterministic agents)
             if hasattr(agent, "last_stage_metrics") and agent.last_stage_metrics is not None:
                 all_stage_metrics.append(agent.last_stage_metrics)
+                if tracer is not None:
+                    try:
+                        tracer.record_stage(agent.last_stage_metrics)
+                    except Exception as exc:
+                        logger.debug("PipelineTracer.record_stage error: %s", exc)
 
             if pipeline_failed:
                 break
@@ -140,6 +162,16 @@ class TrainingPipeline:
         # ── Emit pipeline summary ────────────────────────────────────────────
         # Always emitted (success or failure) so the UI can display cost/latency.
         summary = _build_pipeline_summary(all_stage_metrics)
+        # Finish tracer — best-effort
+        if tracer is not None:
+            try:
+                tracer.finish_run(
+                    total_cost=summary["total_cost_usd"],
+                    outcome="completed" if not pipeline_failed else "failed",
+                )
+            except Exception as exc:
+                logger.debug("PipelineTracer.finish_run error: %s", exc)
+
         logger.info(
             "[%s] Pipeline done — total cost=$%.6f tokens=%d cache_hit=%.1f%%",
             context.run_id,
