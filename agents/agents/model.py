@@ -17,12 +17,14 @@ knowledge; TPE supplies the actual exploration.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from .base import BaseAgent, AgentContext, AgentResult, SONNET
 from .model_catalog import catalog_summary_for_prompt
 from .schemas import ModelRecipe, HPOSearchSpace
 from .validators import validate_recipe_semantics
 from .cache import recipe_cache
+from .memory import episodic_memory, format_memory_exemplar
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +161,17 @@ class ModelAgent(BaseAgent):
 
         catalog = catalog_summary_for_prompt()
         import json
+
+        # ── Episodic memory: inject exemplar if similar past run exists ────────
+        memory_exemplar: str | None = None
+        try:
+            memories = episodic_memory.recall(profile, task_type)
+            if memories:
+                memory_exemplar = format_memory_exemplar(memories[0])
+                logger.info("ModelAgent: memory exemplar injected (grade %s)", memories[0].eval_grade)
+        except Exception as exc:
+            logger.debug("ModelAgent: memory recall failed: %s", exc)
+
         # Compact profile: only the signals that drive model + hyperparameter selection.
         # estimated_tokens_p95 is the key new field — it tells the LLM what max_length
         # to set so 95% of samples are covered without excessive padding.
@@ -175,10 +188,13 @@ class ModelAgent(BaseAgent):
             "label_noise_estimate":  profile.get("label_noise_estimate", 0.0),
             "issues":                profile.get("issues", []),
         }
-        user_msg = json.dumps({
+        payload: dict[str, Any] = {
             "task_spec":    context.task_spec,
             "data_profile": compact_profile,
-        }, indent=2)
+        }
+        if memory_exemplar:
+            payload["memory_exemplar"] = memory_exemplar
+        user_msg = json.dumps(payload, indent=2)
 
         # ── Choose output mode ────────────────────────────────────────────────
         use_hpo = num_rows >= _HPO_MIN_ROWS
