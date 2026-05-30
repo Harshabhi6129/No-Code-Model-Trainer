@@ -21,6 +21,7 @@ import logging
 from .base import BaseAgent, AgentContext, AgentResult, SONNET
 from .model_catalog import catalog_summary_for_prompt
 from .schemas import ModelRecipe, HPOSearchSpace
+from .validators import validate_recipe_semantics
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,19 @@ class ModelAgent(BaseAgent):
             else:
                 logger.warning("Override recipe validation issue: %s", err)
                 context.model_recipe = recipe
-            return _recipe_result(context.model_recipe)
+            val_result = validate_recipe_semantics(context.model_recipe, profile)
+            if not val_result.is_valid:
+                return AgentResult(
+                    agent_name=self.name, success=False, output={"validation_errors": val_result.errors},
+                    message=(
+                        "Recipe has semantic errors that would cause training to fail:\n"
+                        + "\n".join(f"• {e}" for e in val_result.errors)
+                    ),
+                )
+            result = _recipe_result(context.model_recipe)
+            if val_result.warnings:
+                result.metadata["validation_warnings"] = val_result.warnings
+            return result
 
         catalog = catalog_summary_for_prompt()
         import json
@@ -206,7 +219,21 @@ class ModelAgent(BaseAgent):
                 ),
             )
         context.model_recipe = recipe_model.model_dump()
-        return _recipe_result(context.model_recipe)
+        val_result = validate_recipe_semantics(context.model_recipe, profile)
+        if not val_result.is_valid:
+            return AgentResult(
+                agent_name=self.name, success=False,
+                output={"validation_errors": val_result.errors},
+                message=(
+                    "The selected recipe has semantic errors:\n"
+                    + "\n".join(f"• {e}" for e in val_result.errors)
+                    + "\nRetrying with a different configuration is recommended."
+                ),
+            )
+        result = _recipe_result(context.model_recipe)
+        if val_result.warnings:
+            result.metadata["validation_warnings"] = val_result.warnings
+        return result
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
