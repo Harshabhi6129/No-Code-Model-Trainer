@@ -15,7 +15,7 @@ import {
 } from "recharts"
 import {
   CheckCircle2, XCircle, Activity, Clock, ArrowLeft,
-  Loader2, BarChart3, BrainCircuit, GitCompare,
+  Loader2, BarChart3, BrainCircuit, GitCompare, Download,
 } from "lucide-react"
 import type { Run } from "@/lib/supabase/types"
 import { cn } from "@/lib/utils"
@@ -103,6 +103,28 @@ export function CompareClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  function exportCSV() {
+    if (selectedRuns.length === 0) return
+    const headers = ["Metric", ...selectedRuns.map((r, i) => r.model_id ?? `Run ${i + 1}`)]
+    const rows = [
+      ["Grade",     ...selectedRuns.map(r => parseMetrics(r).evaluation_grade ?? "—")],
+      ["Accuracy",  ...selectedRuns.map(r => { const m = parseMetrics(r); return m.accuracy !== null ? (m.accuracy * 100).toFixed(2) + "%" : "—" })],
+      ["F1 Score",  ...selectedRuns.map(r => { const m = parseMetrics(r); return m.f1 !== null ? m.f1.toFixed(3) : "—" })],
+      ["Precision", ...selectedRuns.map(r => { const m = parseMetrics(r); return m.precision !== null ? (m.precision * 100).toFixed(2) + "%" : "—" })],
+      ["Recall",    ...selectedRuns.map(r => { const m = parseMetrics(r); return m.recall !== null ? (m.recall * 100).toFixed(2) + "%" : "—" })],
+      ["Model",     ...selectedRuns.map(r => r.model_id ?? "—")],
+      ["Dataset rows", ...selectedRuns.map(r => r.dataset_rows?.toString() ?? "—")],
+    ]
+    const csv = [headers, ...rows].map(row => row.map(c => `"${c}"`).join(",")).join("\n")
+    const blob = new Blob([csv], { type: "text/csv" })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement("a")
+    a.href     = url
+    a.download = `modelforge-comparison-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   function toggleRun(id: string) {
     setSelected(prev => {
       const next = new Set(prev)
@@ -156,12 +178,18 @@ export function CompareClient() {
         <Button variant="outline" size="sm" asChild>
           <Link href="/runs"><ArrowLeft className="h-3.5 w-3.5 mr-1" /> Back</Link>
         </Button>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold tracking-tight">Compare Runs</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Select up to 6 runs to compare metrics side-by-side.
           </p>
         </div>
+        {selectedRuns.length >= 2 && (
+          <Button variant="outline" size="sm" onClick={exportCSV}>
+            <Download className="h-3.5 w-3.5 mr-1.5" />
+            Export CSV
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
