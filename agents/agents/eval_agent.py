@@ -11,6 +11,7 @@ import logging
 
 from .base import BaseAgent, AgentContext, AgentResult, SONNET
 from .schemas import EvalReport
+from .rubric import compute_normalized_score
 
 # Keep prompts compact for many-class classification tasks
 _MAX_CLASSES_IN_PROMPT = 10
@@ -24,27 +25,20 @@ You will be given:
 - Task type, dataset size, number of classes, class distribution
 - Training metrics: accuracy, weighted F1, precision, recall, per-class F1
 - Training metadata: model, approach, device, epochs, warnings
+- A pre-computed rubric result with the evaluation_grade already determined
+
+IMPORTANT: The "evaluation_grade" field in "rubric_result" is the FINAL GRADE.
+You MUST use this exact grade in your output — do NOT override it.
+Your job is to narrate WHY the model received this grade, not to determine the grade.
 
 Output ONLY valid JSON (no prose, no markdown):
 {
-  "evaluation_grade": "A" | "B" | "C" | "D" | "F",
-  "summary": "<2-3 sentence plain-English summary — calibrated for dataset size and task difficulty>",
+  "evaluation_grade": "<use the grade from rubric_result.letter_grade>",
+  "summary": "<2-3 sentence plain-English summary — explain the grade using rubric_result.grade_rationale>",
   "strengths": ["<strength 1>", "<strength 2>"],
   "concerns": ["<concern 1>"],
   "next_steps": ["<concrete, specific action>", "<concrete, specific action>"]
 }
-
-=== GRADING RUBRIC ===
-(Always calibrate for dataset size — small datasets naturally score lower.)
-
-For datasets >= 1000 samples:
-  A: F1 >= 0.90  B: F1 0.80-0.89  C: F1 0.65-0.79  D: F1 0.50-0.64  F: F1 < 0.50
-
-For datasets 200-999 samples:
-  A: F1 >= 0.85  B: F1 0.72-0.84  C: F1 0.58-0.71  D: F1 0.45-0.57  F: F1 < 0.45
-
-For datasets < 200 samples:
-  A: F1 >= 0.80  B: F1 0.65-0.79  C: F1 0.50-0.64  D: F1 0.38-0.49  F: F1 < 0.38
 
 === CONCERN PATTERNS ===
 - accuracy >> F1 (gap > 0.10): class imbalance — mention it
@@ -70,7 +64,7 @@ Be specific — mention actual actions (e.g., "add 50 more examples for class 'X
 not "add more data"). Reference the actual class names and metrics when relevant."""
 
 
-def _build_prompt(context: AgentContext) -> str:
+def _build_prompt(context: AgentContext, rubric=None) -> str:
     tr = context.training_result
     spec = context.task_spec
     profile = context.data_profile
@@ -110,7 +104,6 @@ def _build_prompt(context: AgentContext) -> str:
             "label_names":          label_names,
             "label_distribution":   label_distribution,
             "dataset_issues":       issues,
-            # B2: label noise estimate from cleanlab — affects grade calibration
             "label_noise_estimate": profile.get("label_noise_estimate", 0.0),
             "label_noise_count":    profile.get("label_noise_count", 0),
         },
@@ -127,10 +120,13 @@ def _build_prompt(context: AgentContext) -> str:
             "f1_weighted":  tr.get("f1"),
             "precision":    tr.get("precision"),
             "recall":       tr.get("recall"),
-            "ece":          tr.get("ece"),   # Expected Calibration Error (C1)
+            "ece":          tr.get("ece"),
             "per_class_f1": per_class,
         },
         "warnings_from_training": all_warnings,
+        # Pre-computed difficulty-adjusted grade — Claude must use this grade,
+        # not determine its own.  Its job is to narrate the rationale.
+        "rubric_result": rubric.to_dict(),
     }, indent=2)
 
 
@@ -177,10 +173,14 @@ class EvalAgent(BaseAgent):
                 next_agent="Deploy",
             )
 
+        # ── Compute deterministic grade before calling Claude ─────────────────
+        # Claude narrates the grade; it doesn't determine it.
+        rubric = compute_normalized_score(tr, context.data_profile)
+
         # ── Call Claude for calibrated evaluation ─────────────────────────────
-        # System prompt cached — grading rubric + concern patterns are ~800 tokens,
+        # System prompt cached — rubric + concern patterns are ~800 tokens,
         # repeated on every run. Cache hits cut cost significantly at scale.
-        prompt = _build_prompt(context)
+        prompt = _build_prompt(context, rubric)
         try:
             raw = await self._chat(
                 system=SYSTEM,
@@ -188,10 +188,12 @@ class EvalAgent(BaseAgent):
                 cache_system=True,
             )
             eval_model, _ = self._parse_llm_json(raw, EvalReport)
-            report = eval_model.model_dump() if eval_model else _fallback_report(tr)
+            report = eval_model.model_dump() if eval_model else _fallback_report(tr, context.data_profile)
+            # Enforce deterministic grade regardless of what Claude produced
+            report["evaluation_grade"] = rubric.letter_grade
         except Exception as exc:
             logger.error("EvalAgent: Claude call failed: %s", exc, exc_info=True)
-            report = _fallback_report(tr)
+            report = _fallback_report(tr, context.data_profile)
 
         # ── Merge raw metrics into output so Supabase gets everything ─────────
         eval_output: dict = {
@@ -242,32 +244,23 @@ class EvalAgent(BaseAgent):
         )
 
 
-def _fallback_report(tr: dict) -> dict:
-    """Deterministic fallback when Claude is unavailable."""
-    f1 = tr.get("f1", 0.0) or 0.0
-    total = (tr.get("train_samples") or 0) + (tr.get("eval_samples") or 0)
+def _fallback_report(tr: dict, profile: dict | None = None) -> dict:
+    """Deterministic fallback when Claude is unavailable. Uses the rubric for grading."""
+    from .rubric import compute_normalized_score
 
-    if total >= 1000:
-        thresholds = [(0.90, "A"), (0.80, "B"), (0.65, "C"), (0.50, "D")]
-    elif total >= 200:
-        thresholds = [(0.85, "A"), (0.72, "B"), (0.58, "C"), (0.45, "D")]
-    else:
-        thresholds = [(0.80, "A"), (0.65, "B"), (0.50, "C"), (0.38, "D")]
-
-    grade = "F"
-    for threshold, g in thresholds:
-        if f1 >= threshold:
-            grade = g
-            break
-
+    rubric = compute_normalized_score(tr, profile or {})
     acc_pct = f"{tr['accuracy'] * 100:.1f}%" if tr.get("accuracy") else "—"
+    f1 = tr.get("f1", 0.0) or 0.0
+
     return {
-        "evaluation_grade": grade,
+        "evaluation_grade": rubric.letter_grade,
         "summary": (
+            f"Grade {rubric.letter_grade} ({rubric.difficulty_tier} task). "
             f"The model achieved {acc_pct} accuracy and {f1:.3f} weighted F1 "
-            f"on {tr.get('eval_samples', '?')} test samples."
+            f"on {tr.get('eval_samples', '?')} test samples. "
+            f"{rubric.grade_rationale}"
         ),
-        "strengths": ["Training completed successfully."],
+        "strengths": ["Training completed successfully.", f"Raw F1: {f1:.3f}."],
         "concerns":  ["Detailed evaluation unavailable — Claude API may be temporarily unreachable."],
         "next_steps": [
             "Re-run the pipeline to get a full evaluation report.",
