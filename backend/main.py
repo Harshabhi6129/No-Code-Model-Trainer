@@ -972,6 +972,108 @@ async def get_models(
     return results
 
 
+@app.get("/leaderboard")
+async def get_leaderboard(limit: int = 50) -> list[dict[str, Any]]:
+    """
+    Community leaderboard: completed runs aggregated by model_id, ranked by best F1.
+    Uses the service-role key so it reads across all users (RLS bypassed intentionally —
+    only anonymised aggregate stats are returned, no user_id or run_id exposed).
+    Returns [] gracefully when Supabase is not configured.
+    """
+    from collections import defaultdict
+
+    supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        return []
+
+    try:
+        from supabase import create_client
+        sb = create_client(supabase_url, supabase_key)
+    except Exception as exc:
+        logger.warning("[leaderboard] supabase init failed: %s", exc)
+        return []
+
+    try:
+        result = (
+            sb.table("runs")
+            .select("model_id, task_type, metrics, completed_at")
+            .eq("status", "completed")
+            .not_.is_("model_id", "null")
+            .order("completed_at", desc=True)
+            .limit(2000)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("[leaderboard] query failed: %s", exc)
+        return []
+
+    runs = result.data or []
+
+    # Aggregate per model_id
+    agg: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "f1_scores": [],
+        "accuracy_scores": [],
+        "task_types": set(),
+        "run_count": 0,
+        "last_run_at": None,
+    })
+
+    for run in runs:
+        mid = run.get("model_id")
+        if not mid:
+            continue
+        metrics  = run.get("metrics") or {}
+        f1       = metrics.get("f1")
+        acc      = metrics.get("accuracy")
+        task     = run.get("task_type")
+        finished = run.get("completed_at")
+
+        bucket = agg[mid]
+        bucket["run_count"] += 1
+        if isinstance(f1, (int, float)):
+            bucket["f1_scores"].append(float(f1))
+        if isinstance(acc, (int, float)):
+            bucket["accuracy_scores"].append(float(acc))
+        if task:
+            bucket["task_types"].add(task)
+        if finished and (bucket["last_run_at"] is None or finished > bucket["last_run_at"]):
+            bucket["last_run_at"] = finished
+
+    # Merge with catalog metadata
+    _agents_import()
+    from agents.model_catalog import get_model
+
+    entries: list[dict[str, Any]] = []
+    for model_id, stats in agg.items():
+        cat      = get_model(model_id) or {}
+        f1s      = stats["f1_scores"]
+        accs     = stats["accuracy_scores"]
+        entries.append({
+            "model_id":      model_id,
+            "display_name":  cat.get("display_name", model_id),
+            "category":      cat.get("category", "unknown"),
+            "provider":      cat.get("provider", "unknown"),
+            "param_count":   cat.get("param_count", ""),
+            "quality_tier":  cat.get("quality_tier", ""),
+            "lora_compatible": cat.get("lora_compatible", False),
+            "run_count":     stats["run_count"],
+            "best_f1":       round(max(f1s), 4) if f1s else None,
+            "avg_f1":        round(sum(f1s) / len(f1s), 4) if f1s else None,
+            "avg_accuracy":  round(sum(accs) / len(accs), 4) if accs else None,
+            "task_types":    sorted(stats["task_types"]),
+            "last_run_at":   stats["last_run_at"],
+        })
+
+    # Sort: best_f1 desc (None last), then run_count desc as tiebreaker
+    entries.sort(key=lambda e: (e["best_f1"] is None, -(e["best_f1"] or 0), -e["run_count"]))
+
+    for i, entry in enumerate(entries[:limit], 1):
+        entry["rank"] = i
+
+    return entries[:limit]
+
+
 @app.get("/runs/{run_id}/script")
 async def download_training_script(run_id: str) -> StreamingResponse:
     """
