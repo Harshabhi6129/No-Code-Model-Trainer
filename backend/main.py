@@ -787,12 +787,12 @@ async def launch_sweep(req: SweepRequest) -> dict[str, Any]:
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str) -> dict[str, Any]:
-    """Get the last known status for a WebSocket training job."""
-    from services.socket_manager import manager
-    state = manager.get_state(job_id)
-    if state is None:
-        raise HTTPException(404, f"Job {job_id} not found")
-    return state
+    """Deprecated — training progress is streamed via SSE on POST /chat."""
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Training progress is streamed in real-time "
+        "via Server-Sent Events on POST /chat — connect to that stream instead.",
+    )
 
 
 class InferRequest(BaseModel):

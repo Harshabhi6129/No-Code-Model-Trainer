@@ -20,7 +20,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Resolved from env so the path is configurable in prod (e.g. ephemeral storage).
-RUNS_DIR = Path(os.getenv("RUNS_DIR", str(Path(__file__).parent.parent.parent / "backend" / "runs")))
+RUNS_DIR = Path(os.getenv("RUNS_DIR", str(Path(__file__).parent.parent.parent / "agents" / "runs")))
 
 SUPPORTED_TASK_TYPES = {"text_classification", "token_classification"}
 
