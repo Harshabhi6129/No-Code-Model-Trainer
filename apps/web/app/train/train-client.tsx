@@ -202,6 +202,16 @@ const GRADE_STYLES: Record<string, string> = {
 // State helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
+function getStoredDefaults(): Partial<HyperParams> {
+  try {
+    const raw = typeof localStorage !== "undefined"
+      ? localStorage.getItem("modelforge_train_defaults")
+      : null
+    if (raw) return JSON.parse(raw) as Partial<HyperParams>
+  } catch {}
+  return {}
+}
+
 function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession {
   return {
     id: crypto.randomUUID(),
@@ -212,7 +222,7 @@ function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession 
     uploadResult: null,
     intent: "",
     selectedModelId: "roberta-base",
-    hyperParams: { ...DEFAULT_PARAMS },
+    hyperParams: { ...DEFAULT_PARAMS, ...getStoredDefaults() },
     runId: null,
     grade: null,
     accuracy: null,
