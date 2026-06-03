@@ -38,8 +38,10 @@ def export_model(
         logger.info("Detected PEFT model — merging LoRA adapters before export")
         model = model.merge_and_unload()
 
-    # Dequantize if needed (QLoRA / bitsandbytes quantized models)
-    if hasattr(model, "dequantize"):
+    # Dequantize only if the model is actually quantized (QLoRA / bitsandbytes).
+    # transformers.PreTrainedModel always has a dequantize() method but raises
+    # ValueError when called on a non-quantized model — guard with is_quantized.
+    if getattr(model, "is_quantized", False) and hasattr(model, "dequantize"):
         logger.info("Dequantizing model for export")
         model = model.dequantize()
 
