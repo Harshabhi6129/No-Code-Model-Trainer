@@ -24,8 +24,25 @@ jobs:
           git config --global user.email "github-action@modelforge.ai"
           git config --global user.name  "ModelForge CI"
 
-          # Add the HF Space as a remote and force-push
+          # Create an orphan branch — single flat commit with NO git history.
+          # This avoids the large files that exist in old commits being rejected
+          # by HuggingFace Hub's 10 MB per-file limit.
+          git checkout --orphan hf-deploy
+
+          # Stage everything from the current working tree
+          git add -A
+
+          # Remove the legacy data directory (large static files not needed
+          # in the Docker image — they are not referenced by the current code)
+          git rm --cached backend/data/ -r --ignore-unmatch
+          git rm --cached backend/uploads/ -r --ignore-unmatch
+          git rm --cached agents/runs/ -r --ignore-unmatch
+          git rm --cached agents/traces/ -r --ignore-unmatch
+
+          git commit -m "deploy: $(date '+%Y-%m-%d %H:%M UTC')"
+
           git remote add space \
             "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID}"
 
-          git push space main --force
+          # Force-push the flat commit — HF Space rebuilds Docker on every push
+          git push space hf-deploy:main --force
