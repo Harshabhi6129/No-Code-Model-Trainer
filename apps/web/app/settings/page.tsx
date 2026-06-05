@@ -6,17 +6,20 @@ export default async function SettingsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Fetch run stats for the profile card
-  let totalRuns = 0
+  let totalRuns     = 0
   let completedRuns = 0
+  let fullName      = ""
+
   if (user?.id) {
-    const { data: runs } = await supabase
-      .from("runs")
-      .select("status")
-      .eq("user_id", user.id)
-    const runsArr = (runs ?? []) as { status: string }[]
-    totalRuns = runsArr.length
+    const [runsResult, profileResult] = await Promise.all([
+      supabase.from("runs").select("status").eq("user_id", user.id),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any).from("profiles").select("full_name").eq("id", user.id).single(),
+    ])
+    const runsArr = (runsResult.data ?? []) as { status: string }[]
+    totalRuns     = runsArr.length
     completedRuns = runsArr.filter(r => r.status === "completed").length
+    fullName      = (profileResult.data as { full_name?: string } | null)?.full_name ?? ""
   }
 
   return (
@@ -26,6 +29,7 @@ export default async function SettingsPage() {
         createdAt={user?.created_at ?? ""}
         totalRuns={totalRuns}
         completedRuns={completedRuns}
+        initialFullName={fullName}
       />
     </AppShell>
   )

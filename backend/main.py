@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,14 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     file_id = str(uuid.uuid4())
     dest = UPLOADS_DIR / f"{file_id}{suffix}"
     content = await file.read()
+
+    MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            413,
+            f"File too large ({len(content) // (1024 * 1024)} MB). Maximum allowed size is 50 MB.",
+        )
+
     dest.write_bytes(content)
     _FILE_REGISTRY[file_id] = dest
 
@@ -218,6 +227,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
         "data_warnings": data_warnings,
         "duplicate_count": dup_count,
         "null_count": null_count,
+        "file_size_bytes": len(content),
     }
 
 
@@ -713,7 +723,7 @@ async def _run_sweep_child(
                 },
                 "artifact_path": train_out.get("artifact_path"),
                 "sweep_config":  sweep_config_combo,
-                "completed_at":  "now()",
+                "completed_at":  datetime.utcnow().isoformat() + "Z",
             }).eq("id", run_id).execute()
         except Exception as exc:
             logger.warning("[sweep][%s] failed to update run record: %s", run_id, exc)

@@ -24,7 +24,7 @@ export async function proxy(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  const protectedPaths = ["/dashboard", "/train", "/runs"]
+  const protectedPaths = ["/dashboard", "/train", "/runs", "/datasets", "/models", "/settings"]
   const isProtected = protectedPaths.some((p) => pathname.startsWith(p))
 
   const devPreview = process.env.NEXT_PUBLIC_DEV_PREVIEW === "true"
