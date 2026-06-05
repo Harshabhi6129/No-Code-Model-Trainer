@@ -210,8 +210,9 @@ export function Sidebar({ userEmail }: SidebarProps) {
 
       {/* ── User card ─────────────────────────────────────── */}
       <div className="px-3 pb-3">
-        <div
-          className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all duration-200 cursor-default"
+        <Link
+          href="/settings"
+          className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all duration-200"
           style={{
             background: "rgba(255,255,255,0.03)",
             border: "1px solid rgba(255,255,255,0.06)",
@@ -254,7 +255,8 @@ export function Sidebar({ userEmail }: SidebarProps) {
               {userEmail}
             </p>
           </div>
-        </div>
+          <ChevronRight className="h-3 w-3 shrink-0" style={{ color: "rgba(99,102,241,0.4)" }} />
+        </Link>
       </div>
     </aside>
   )
