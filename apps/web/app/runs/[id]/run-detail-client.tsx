@@ -1172,10 +1172,15 @@ export function RunDetailClient({ run: initialRun }: { run: Run; events: RunEven
 
   return (
     <div className="p-8 max-w-5xl mx-auto space-y-6">
-      {/* Back */}
-      <Link href="/runs" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-        <ArrowLeft className="h-3.5 w-3.5" /> All runs
-      </Link>
+      {/* Breadcrumb */}
+      <nav className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Link href="/runs" className="hover:text-foreground transition-colors flex items-center gap-1">
+          <ArrowLeft className="h-3 w-3" />
+          All Runs
+        </Link>
+        <span className="opacity-40">/</span>
+        <span className="text-foreground/60 font-mono truncate max-w-[180px]">{run.id.slice(0, 8)}…</span>
+      </nav>
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">

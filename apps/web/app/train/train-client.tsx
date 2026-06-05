@@ -50,6 +50,7 @@ interface UploadResult {
   data_warnings: string[]
   duplicate_count: number
   null_count: number
+  file_size_bytes?: number
   sample_rows: Record<string, unknown>[]
 }
 
@@ -211,6 +212,11 @@ function getStoredDefaults(): Partial<HyperParams> {
     if (raw) return JSON.parse(raw) as Partial<HyperParams>
   } catch {}
   return {}
+}
+
+function isNetworkError(err: unknown): boolean {
+  const msg = String(err).toLowerCase()
+  return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("load failed")
 }
 
 function makeSession(overrides: Partial<TrainingSession> = {}): TrainingSession {
@@ -944,6 +950,9 @@ function SetupColumn({
   const [dragOver, setDragOver]   = useState(false)
 
   const handleFile = useCallback(async (file: File) => {
+    if (file.size > 20 * 1024 * 1024) {
+      toast.warning(`Large file (${(file.size / (1024 * 1024)).toFixed(1)} MB) — CPU training may be slow`)
+    }
     setUploading(true)
     const form = new FormData()
     form.append("file", file)
@@ -952,7 +961,7 @@ function SetupColumn({
       if (!res.ok) throw new Error(await res.text())
       const data: UploadResult = await res.json()
       const label = file.name.replace(/\.(csv|json|jsonl)$/i, "").replace(/[_-]/g, " ").slice(0, 28)
-      onUpdate({ uploadResult: data, setupSubstep: "analyzing", label })
+      onUpdate({ uploadResult: { ...data, file_size_bytes: file.size }, setupSubstep: "analyzing", label })
       toast.success(`Loaded ${data.rows.toLocaleString()} rows from ${data.filename}`)
     } catch (err) {
       toast.error(`Upload failed: ${err}`)
@@ -1096,13 +1105,14 @@ function SetupSummary({ session }: { session: TrainingSession }) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function TrainingColumn({
-  session, messages, epochMetrics, streaming, isPaused, onCancel, onPause, onResume,
+  session, messages, epochMetrics, streaming, isPaused, reconnecting, onCancel, onPause, onResume,
 }: {
   session: TrainingSession
   messages: AgentMessage[]
   epochMetrics: EpochPoint[]
   streaming: boolean
   isPaused?: boolean
+  reconnecting?: boolean
   onCancel?: () => void
   onPause?: () => void
   onResume?: () => void
@@ -1113,6 +1123,33 @@ function TrainingColumn({
 
   const isIdle = session.status === "setup"
 
+  // ETA computation — once ≥2 epoch events arrive, project remaining time
+  const startTimeRef = useRef<number | null>(null)
+  const [etaLabel, setEtaLabel] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!streaming) { startTimeRef.current = null; setEtaLabel(null); return }
+    if (startTimeRef.current === null) startTimeRef.current = Date.now()
+  }, [streaming])
+
+  useEffect(() => {
+    if (!streaming || isPaused || epochMetrics.length < 2 || !startTimeRef.current) {
+      setEtaLabel(null)
+      return
+    }
+    const totalEpochs = session.hyperParams.num_epochs
+    const completedEpochs = Math.max(...epochMetrics.map(e => e.epoch))
+    if (completedEpochs <= 0) { setEtaLabel(null); return }
+    const elapsedMs = Date.now() - startTimeRef.current
+    const msPerEpoch = elapsedMs / completedEpochs
+    const remaining = totalEpochs - completedEpochs
+    const etaSecs = Math.round((remaining * msPerEpoch) / 1000)
+    if (etaSecs < 30) { setEtaLabel(null); return }
+    const mins = Math.floor(etaSecs / 60)
+    const secs = etaSecs % 60
+    setEtaLabel(mins > 0 ? `~${mins}m ${secs}s remaining` : `~${secs}s remaining`)
+  }, [epochMetrics, streaming, isPaused, session.hyperParams.num_epochs])
+
   return (
     <div className="flex flex-col h-full min-w-[280px]">
       {/* Header */}
@@ -1120,7 +1157,12 @@ function TrainingColumn({
         <div className="flex items-center gap-2">
           <Cpu className="h-4 w-4 text-primary" />
           <span className="text-sm font-semibold">Training</span>
-          {streaming && (
+          {reconnecting ? (
+            <span className="ml-auto text-[10px] text-amber-400 font-medium flex items-center gap-1.5 animate-pulse">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Reconnecting…
+            </span>
+          ) : streaming && (
             <>
               {isPaused ? (
                 <span className="ml-auto text-[10px] text-yellow-400 font-medium flex items-center gap-1">
@@ -1150,6 +1192,12 @@ function TrainingColumn({
             </>
           )}
         </div>
+        {etaLabel && (
+          <div className="flex items-center gap-1 mt-1">
+            <Clock className="h-3 w-3 text-muted-foreground" />
+            <span className="text-[10px] text-muted-foreground font-mono">{etaLabel}</span>
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -1367,6 +1415,48 @@ function ResultsColumn({ session }: { session: TrainingSession }) {
                 All Runs
               </Button>
             )}
+
+            {/* What's Next card — shows after training completes */}
+            {session.runId && (
+              <div className="rounded-xl border border-border bg-secondary/20 p-3 space-y-2">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">What&apos;s next?</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { icon: ArrowRight, label: "Full Report",   action: () => router.push(`/runs/${session.runId}`),  color: "text-primary" },
+                    { icon: TrendingUp, label: "Retrain",        action: () => {
+                        if (!session.uploadResult) return
+                        const prefill = {
+                          intent: session.intent,
+                          selectedModelId: session.selectedModelId,
+                          hyperParams: session.hyperParams,
+                          datasetFilename: session.uploadResult.filename,
+                          datasetRows: session.uploadResult.rows,
+                          textColumns: session.uploadResult.text_columns,
+                          labelColumns: session.uploadResult.label_columns,
+                          uniqueLabels: session.uploadResult.unique_labels,
+                          label: `Retrain: ${session.label}`,
+                          sourceRunId: session.runId!,
+                        }
+                        localStorage.setItem("modelforge_retrain_prefill", JSON.stringify(prefill))
+                        router.push("/train")
+                      },
+                      color: "text-violet-400"
+                    },
+                    { icon: Zap,        label: "Export",         action: () => router.push(`/runs/${session.runId}#export`), color: "text-cyan-400" },
+                    { icon: BarChart3,  label: "All Runs",       action: () => router.push("/runs"),  color: "text-amber-400" },
+                  ] as const).map(({ icon: Icon, label, action, color }) => (
+                    <button
+                      key={label}
+                      onClick={action}
+                      className="flex items-center gap-1.5 p-2 rounded-lg border border-border hover:border-primary/40 hover:bg-primary/5 transition-all text-left"
+                    >
+                      <Icon className={`h-3 w-3 shrink-0 ${color}`} />
+                      <span className="text-[10px] font-medium">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1425,7 +1515,7 @@ function SessionLabelEditor({
 // ──────────────────────────────────────────────────────────────────────────────
 
 function SessionWorkspace({
-  session, messages, epochMetrics, streaming, isPaused,
+  session, messages, epochMetrics, streaming, isPaused, reconnecting,
   onUpdate, onStartTraining, onCancel, onPause, onResume,
 }: {
   session: TrainingSession
@@ -1433,6 +1523,7 @@ function SessionWorkspace({
   epochMetrics: EpochPoint[]
   streaming: boolean
   isPaused: boolean
+  reconnecting: boolean
   onUpdate: (patch: Partial<TrainingSession>) => void
   onStartTraining: () => void
   onCancel: () => void
@@ -1465,7 +1556,7 @@ function SessionWorkspace({
           />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
-          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} isPaused={isPaused} onCancel={onCancel} onPause={onPause} onResume={onResume} />
+          <TrainingColumn session={session} messages={messages} epochMetrics={epochMetrics} streaming={streaming} isPaused={isPaused} reconnecting={reconnecting} onCancel={onCancel} onPause={onPause} onResume={onResume} />
         </div>
         <div className="flex-1 overflow-y-auto min-w-[260px]">
           <ResultsColumn session={session} />
@@ -1511,7 +1602,17 @@ export function TrainClient() {
   const [liveEpochMetrics,  setLiveEpochMetrics]  = useState<Record<string, EpochPoint[]>>({})
   const [streamingId,       setStreamingId]       = useState<string | null>(null)
   const [pausedIds,         setPausedIds]         = useState<Set<string>>(new Set())
+  const [reconnectingIds,   setReconnectingIds]   = useState<Set<string>>(new Set())
   const hydratedRef = useRef(false)
+
+  // Tab-close warning when a session is actively streaming
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (streamingId) { e.preventDefault(); e.returnValue = "" }
+    }
+    window.addEventListener("beforeunload", handler)
+    return () => window.removeEventListener("beforeunload", handler)
+  }, [streamingId])
 
   // Hydrate from localStorage once on mount
   useEffect(() => {
@@ -1521,16 +1622,29 @@ export function TrainClient() {
     try {
       const raw = localStorage.getItem(LS_KEY)
       if (raw) {
-        const parsed: TrainingSession[] = JSON.parse(raw).map((s: TrainingSession) => ({
-          ...s,
-          // Recover sessions that were mid-stream when page was closed
-          status: s.status === "training" ? "failed" : s.status,
-          errorMessage: s.status === "training"
-            ? (s.errorMessage ?? "Session interrupted. Try starting training again.")
-            : s.errorMessage,
-        }))
+        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
+        const now = Date.now()
+        let staleCleaned = 0
+        const parsed: TrainingSession[] = JSON.parse(raw)
+          .map((s: TrainingSession) => ({
+            ...s,
+            // Recover sessions that were mid-stream when page was closed
+            status: s.status === "training" ? "failed" : s.status,
+            errorMessage: s.status === "training"
+              ? (s.errorMessage ?? "Session interrupted. Try starting training again.")
+              : s.errorMessage,
+          }))
+          .filter((s: TrainingSession) => {
+            const stale = (s.status === "completed" || s.status === "failed") &&
+              now - s.createdAt > SEVEN_DAYS
+            if (stale) staleCleaned++
+            return !stale
+          })
         const firstId = parsed[0]?.id ?? null
         dispatch({ type: "HYDRATE", sessions: parsed, activeId: firstId })
+        if (staleCleaned > 0) {
+          setTimeout(() => toast.info(`${staleCleaned} old session${staleCleaned > 1 ? "s" : ""} cleaned up`), 1200)
+        }
       }
     } catch { /* corrupt localStorage — ignore */ }
 
@@ -1726,164 +1840,198 @@ export function TrainClient() {
 
     const hfToken = localStorage.getItem("modelforge_hf_token") || null
 
-    try {
-      const res = await fetch(`${API_URL}/chat`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          message:                  userIntent,
-          file_id:                  session.uploadResult.file_id,
-          run_id:                   newRunId,
-          hyperparameter_overrides: overrides,
-          hf_token:                 hfToken,
-        }),
-      })
-      if (!res.ok) throw new Error(await res.text())
+    const allMessages: AgentMessage[] = []
+    const epochPoints: EpochPoint[] = []
+    const MAX_RETRIES = 3
+    let finalError: string | null = null
 
-      const reader  = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let buf = ""
-      const allMessages: AgentMessage[] = []
-      const epochPoints: EpochPoint[] = []
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delaySecs = Math.pow(2, attempt - 1) * 2   // 2s, 4s, 8s
+        setReconnectingIds(prev => new Set([...prev, sessionId]))
+        updateSession(sessionId, {
+          errorMessage: `Connection lost. Reconnecting (${attempt}/${MAX_RETRIES})…`,
+        })
+        await new Promise(r => setTimeout(r, delaySecs * 1000))
+        setReconnectingIds(prev => { const next = new Set(prev); next.delete(sessionId); return next })
+        updateSession(sessionId, { errorMessage: null })
+      }
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split("\n")
-        buf = lines.pop() ?? ""
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue
-          const payload = line.slice(6).trim()
-          if (payload === "[DONE]") break
-          try {
-            const msg: AgentMessage = JSON.parse(payload)
-            // Pipeline summary — store cost metadata, not shown in message list
-            if (msg.agent === "pipeline" && msg.output.type === "pipeline_summary") {
-              updateSession(sessionId, {
-                pipelineCost: {
-                  totalCost:   typeof msg.output.total_cost_usd          === "number" ? msg.output.total_cost_usd          : 0,
-                  totalTokens: typeof msg.output.total_tokens            === "number" ? msg.output.total_tokens            : 0,
-                  cacheRatio:  typeof msg.output.overall_cache_hit_ratio === "number" ? Math.round(msg.output.overall_cache_hit_ratio * 100) : 0,
-                  elapsedS:    typeof msg.output.elapsed_seconds         === "number" ? Math.round(msg.output.elapsed_seconds)         : 0,
-                },
-              })
-              continue
-            }
-
-            // Epoch progress events are streamed separately — not added to the message list
-            if (msg.agent === "Train" && msg.output.status === "epoch") {
-              const pt: EpochPoint = {
-                epoch:         msg.output.epoch as number,
-                step:          msg.output.step  as number,
-                loss:          msg.output.loss  as number | null,
-                eval_loss:     msg.output.eval_loss as number | null,
-                learning_rate: msg.output.learning_rate as number | null,
-              }
-              epochPoints.push(pt)
-              setLiveEpochMetrics(prev => ({ ...prev, [sessionId]: [...epochPoints] }))
-              continue
-            }
-
-            // ── HITL: IntentAgent needs clarification ─────────────────────────
-            if (
-              msg.agent === "Intent"
-              && msg.success
-              && typeof msg.output.clarification_needed === "string"
-              && msg.output.clarification_needed
-            ) {
-              updateSession(sessionId, {
-                status: "training",  // keep training state — not failed
-                clarificationQuestion: msg.output.clarification_needed as string,
-              })
-              allMessages.push(msg)
-              setLiveMessages(prev => ({ ...prev, [sessionId]: [...allMessages] }))
-              // Stream will end (pipeline paused) — break out of the read loop
-              break
-            }
-
-            const lastIdx = allMessages.findLastIndex(m => m.agent === msg.agent)
-            const lastWasKeepalive = lastIdx >= 0 && allMessages[lastIdx].output.final === false
-            if (lastWasKeepalive) {
-              allMessages[lastIdx] = msg
-            } else {
-              allMessages.push(msg)
-            }
-            setLiveMessages(prev => ({ ...prev, [sessionId]: [...allMessages] }))
-          } catch { /* ignore parse errors */ }
+      try {
+        const res = await fetch(`${API_URL}/chat`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            message:                  userIntent,
+            file_id:                  session.uploadResult!.file_id,
+            run_id:                   newRunId,
+            ...(attempt > 0 && newRunId ? { resume_from_run_id: newRunId } : {}),
+            hyperparameter_overrides: overrides,
+            hf_token:                 hfToken,
+          }),
+        })
+        if (!res.ok) {
+          finalError = await res.text()
+          break  // server error — don't retry
         }
+
+        const reader  = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buf = ""
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split("\n")
+          buf = lines.pop() ?? ""
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue
+            const payload = line.slice(6).trim()
+            if (payload === "[DONE]") break
+            try {
+              const msg: AgentMessage = JSON.parse(payload)
+              // Pipeline summary — store cost metadata, not shown in message list
+              if (msg.agent === "pipeline" && msg.output.type === "pipeline_summary") {
+                updateSession(sessionId, {
+                  pipelineCost: {
+                    totalCost:   typeof msg.output.total_cost_usd          === "number" ? msg.output.total_cost_usd                                                             : 0,
+                    totalTokens: ((msg.output.total_input_tokens ?? 0) as number) + ((msg.output.total_output_tokens ?? 0) as number),
+                    cacheRatio:  typeof msg.output.overall_cache_hit_ratio === "number" ? Math.round(msg.output.overall_cache_hit_ratio * 100) : 0,
+                    elapsedS:    typeof msg.output.total_latency_ms        === "number" ? Math.round(msg.output.total_latency_ms / 1000)        : 0,
+                  },
+                })
+                continue
+              }
+
+              // Epoch progress events are streamed separately — not added to the message list
+              if (msg.agent === "Train" && msg.output.status === "epoch") {
+                const pt: EpochPoint = {
+                  epoch:         msg.output.epoch as number,
+                  step:          msg.output.step  as number,
+                  loss:          msg.output.loss  as number | null,
+                  eval_loss:     msg.output.eval_loss as number | null,
+                  learning_rate: msg.output.learning_rate as number | null,
+                }
+                epochPoints.push(pt)
+                setLiveEpochMetrics(prev => ({ ...prev, [sessionId]: [...epochPoints] }))
+                continue
+              }
+
+              // ── HITL: IntentAgent needs clarification ─────────────────────────
+              if (
+                msg.agent === "Intent"
+                && msg.success
+                && typeof msg.output.clarification_needed === "string"
+                && msg.output.clarification_needed
+              ) {
+                updateSession(sessionId, {
+                  status: "training",  // keep training state — not failed
+                  clarificationQuestion: msg.output.clarification_needed as string,
+                })
+                allMessages.push(msg)
+                setLiveMessages(prev => ({ ...prev, [sessionId]: [...allMessages] }))
+                // Stream will end (pipeline paused) — break out of the read loop
+                break
+              }
+
+              const lastIdx = allMessages.findLastIndex(m => m.agent === msg.agent)
+              const lastWasKeepalive = lastIdx >= 0 && allMessages[lastIdx].output.final === false
+              if (lastWasKeepalive) {
+                allMessages[lastIdx] = msg
+              } else {
+                allMessages.push(msg)
+              }
+              setLiveMessages(prev => ({ ...prev, [sessionId]: [...allMessages] }))
+            } catch { /* ignore parse errors */ }
+          }
+        }
+
+        finalError = null
+        break  // stream completed successfully
+      } catch (err) {
+        if (attempt < MAX_RETRIES && isNetworkError(err)) {
+          continue  // retry on network error
+        }
+        finalError = String(err)
+        break
       }
+    }
 
-      // Persist to Supabase
-      const pipelineSuccess = allMessages.every(m => m.success)
-      const intentOut = (allMessages.find(m => m.agent === "Intent")?.output ?? {}) as Record<string, unknown>
-      const modelOut  = (allMessages.find(m => m.agent === "Model")?.output  ?? {}) as Record<string, unknown>
-      const trainOut  = (allMessages.find(m => m.agent === "Train" && m.output.final !== false)?.output ?? {}) as Record<string, unknown>
-      const evalOut   = (allMessages.find(m => m.agent === "Eval")?.output   ?? {}) as Record<string, unknown>
-      const deployOut = (allMessages.find(m => m.agent === "Deploy")?.output ?? {}) as Record<string, unknown>
-      const mSrc      = Object.keys(evalOut).length > 0 ? evalOut : trainOut
-
-      if (newRunId) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabase as any).from("runs").update({
-          status:        pipelineSuccess ? "completed" : "failed",
-          task_type:     intentOut.task_type  as string ?? null,
-          model_id:      (modelOut.base_model ?? intentOut.base_model_hint) as string ?? null,
-          intent_spec:   intentOut,
-          model_recipe:  modelOut,
-          metrics: {
-            accuracy:         mSrc.accuracy         ?? null,
-            f1:               mSrc.f1               ?? null,
-            precision:        mSrc.precision        ?? null,
-            recall:           mSrc.recall           ?? null,
-            per_class_f1:     mSrc.per_class_f1     ?? {},
-            evaluation_grade: evalOut.evaluation_grade ?? null,
-            summary:          evalOut.summary          ?? null,
-            strengths:        evalOut.strengths        ?? [],
-            concerns:         evalOut.concerns         ?? [],
-            next_steps:       evalOut.next_steps       ?? [],
-          },
-          artifact_path: trainOut.model_path  as string ?? null,
-          hf_model_url:  deployOut.hf_url     as string ?? null,
-          hf_repo_id:    deployOut.hf_repo_id as string ?? null,
-          model_card:    deployOut.model_card as string ?? null,
-          deploy_status: deployOut.status     as string ?? "not_deployed",
-          completed_at:  new Date().toISOString(),
-          error_message: pipelineSuccess ? null : (allMessages.find(m => !m.success)?.message ?? null),
-        }).eq("id", newRunId)
-      }
-
-      updateSession(sessionId, {
-        status:      pipelineSuccess ? "completed" : "failed",
-        grade:       typeof evalOut.evaluation_grade === "string" ? evalOut.evaluation_grade : null,
-        accuracy:    typeof mSrc.accuracy === "number" ? mSrc.accuracy : null,
-        f1:          typeof mSrc.f1       === "number" ? mSrc.f1       : null,
-        artifactPath: trainOut.model_path as string ?? null,
-        errorMessage: pipelineSuccess ? null : (allMessages.find(m => !m.success)?.message ?? null),
-        epochMetrics: epochPoints,
-      })
-
-      if (!pipelineSuccess) toast.error("Pipeline encountered an error — see training column")
-      else toast.success("Training complete!")
-    } catch (err) {
-      const msg = String(err)
-      updateSession(sessionId, { status: "failed", errorMessage: msg })
+    if (finalError !== null) {
+      updateSession(sessionId, { status: "failed", errorMessage: finalError })
       setLiveMessages(prev => ({
         ...prev,
         [sessionId]: [
           ...(prev[sessionId] ?? []),
-          { agent: "System", success: false, message: msg, output: {} },
+          { agent: "System", success: false, message: finalError!, output: {} },
         ],
       }))
       if (newRunId) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabase as any).from("runs").update({ status: "failed", error_message: msg }).eq("id", newRunId)
+        await (supabase as any).from("runs").update({ status: "failed", error_message: finalError }).eq("id", newRunId)
       }
-      toast.error(`Pipeline error: ${err}`)
-    } finally {
+      toast.error(`Pipeline error: ${finalError}`)
       setStreamingId(null)
       setPausedIds(prev => { const next = new Set(prev); next.delete(sessionId); return next })
+      return
     }
+
+    // Persist to Supabase
+    const pipelineSuccess = allMessages.every(m => m.success)
+    const intentOut = (allMessages.find(m => m.agent === "Intent")?.output ?? {}) as Record<string, unknown>
+    const modelOut  = (allMessages.find(m => m.agent === "Model")?.output  ?? {}) as Record<string, unknown>
+    const trainOut  = (allMessages.find(m => m.agent === "Train" && m.output.final !== false)?.output ?? {}) as Record<string, unknown>
+    const evalOut   = (allMessages.find(m => m.agent === "Eval")?.output   ?? {}) as Record<string, unknown>
+    const deployOut = (allMessages.find(m => m.agent === "Deploy")?.output ?? {}) as Record<string, unknown>
+    const mSrc      = Object.keys(evalOut).length > 0 ? evalOut : trainOut
+
+    if (newRunId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("runs").update({
+        status:        pipelineSuccess ? "completed" : "failed",
+        task_type:     intentOut.task_type  as string ?? null,
+        model_id:      (modelOut.base_model ?? intentOut.base_model_hint) as string ?? null,
+        intent_spec:   intentOut,
+        model_recipe:  modelOut,
+        metrics: {
+          accuracy:         mSrc.accuracy         ?? null,
+          f1:               mSrc.f1               ?? null,
+          precision:        mSrc.precision        ?? null,
+          recall:           mSrc.recall           ?? null,
+          per_class_f1:     mSrc.per_class_f1     ?? {},
+          evaluation_grade: evalOut.evaluation_grade ?? null,
+          summary:          evalOut.summary          ?? null,
+          strengths:        evalOut.strengths        ?? [],
+          concerns:         evalOut.concerns         ?? [],
+          next_steps:       evalOut.next_steps       ?? [],
+        },
+        artifact_path: trainOut.model_path  as string ?? null,
+        hf_model_url:  deployOut.hf_url     as string ?? null,
+        hf_repo_id:    deployOut.hf_repo_id as string ?? null,
+        model_card:    deployOut.model_card as string ?? null,
+        deploy_status: deployOut.status     as string ?? "not_deployed",
+        completed_at:  new Date().toISOString(),
+        error_message: pipelineSuccess ? null : (allMessages.find(m => !m.success)?.message ?? null),
+      }).eq("id", newRunId)
+    }
+
+    updateSession(sessionId, {
+      status:      pipelineSuccess ? "completed" : "failed",
+      grade:       typeof evalOut.evaluation_grade === "string" ? evalOut.evaluation_grade : null,
+      accuracy:    typeof mSrc.accuracy === "number" ? mSrc.accuracy : null,
+      f1:          typeof mSrc.f1       === "number" ? mSrc.f1       : null,
+      artifactPath: trainOut.model_path as string ?? null,
+      errorMessage: pipelineSuccess ? null : (allMessages.find(m => !m.success)?.message ?? null),
+      epochMetrics: epochPoints,
+    })
+
+    if (!pipelineSuccess) toast.error("Pipeline encountered an error — see training column")
+    else toast.success("Training complete!")
+
+    setStreamingId(null)
+    setPausedIds(prev => { const next = new Set(prev); next.delete(sessionId); return next })
   }
 
   // ── HITL: submit user clarification and resume pipeline ──────────────────
@@ -1993,6 +2141,7 @@ export function TrainClient() {
             epochMetrics={activeEpochMetrics}
             streaming={streamingId === activeSession.id}
             isPaused={pausedIds.has(activeSession.id)}
+            reconnecting={reconnectingIds.has(activeSession.id)}
             onUpdate={patch => updateSession(activeSession.id, patch)}
             onStartTraining={() => startTraining(activeSession.id)}
             onCancel={() => cancelTraining(activeSession.id)}

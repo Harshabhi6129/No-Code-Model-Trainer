@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
-import { Sidebar } from "./sidebar"
+import { MobileNav } from "./mobile-nav"
 
 const DEV_PREVIEW = process.env.NEXT_PUBLIC_DEV_PREVIEW === "true"
 
@@ -24,14 +24,14 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         <div className="aurora-orb aurora-4" />
       </div>
 
-      <Sidebar userEmail={userEmail} />
+      <MobileNav userEmail={userEmail} />
 
-      <main className="flex-1 ml-60 min-h-screen relative z-10">
+      <main className="flex-1 ml-0 md:ml-60 min-h-screen relative z-10">
         {/* Dot grid */}
-        <div className="pointer-events-none fixed inset-0 ml-60 bg-grid opacity-40 z-0" />
+        <div className="pointer-events-none fixed inset-0 md:ml-60 bg-grid opacity-40 z-0" />
         {/* Vignette fade at edges */}
         <div
-          className="pointer-events-none fixed inset-0 ml-60 z-0"
+          className="pointer-events-none fixed inset-0 md:ml-60 z-0"
           style={{
             background:
               "radial-gradient(ellipse 90% 55% at 50% 0%, transparent 30%, rgba(6,10,16,0.7) 100%)",

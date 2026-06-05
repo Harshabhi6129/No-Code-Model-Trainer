@@ -13,6 +13,12 @@ import { toast } from "sonner"
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const LS_SESSIONS = "modelforge_sessions_v2"
 
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${bytes} B`
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────────────────────
@@ -28,6 +34,7 @@ interface StoredDataset {
   class_distribution: Record<string, number>
   duplicate_count: number
   null_count: number
+  file_size_bytes?: number
   sessionCount: number
   lastUsed: number
 }
@@ -287,7 +294,12 @@ function DatasetCard({
               ) : (
                 <p className="font-semibold text-sm truncate">{ds.filename}</p>
               )}
-              <p className="text-[10px] text-muted-foreground font-mono">{ds.file_id.slice(0, 8)}…</p>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+                <span>{ds.file_id.slice(0, 8)}…</span>
+                {ds.file_size_bytes != null && (
+                  <span className="text-muted-foreground/60">{formatFileSize(ds.file_size_bytes)}</span>
+                )}
+              </div>
             </div>
           </div>
 
