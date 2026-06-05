@@ -27,14 +27,16 @@ export async function proxy(request: NextRequest) {
   const protectedPaths = ["/dashboard", "/train", "/runs"]
   const isProtected = protectedPaths.some((p) => pathname.startsWith(p))
 
-  if (!user && isProtected) {
+  const devPreview = process.env.NEXT_PUBLIC_DEV_PREVIEW === "true"
+
+  if (!user && isProtected && !devPreview) {
     const url = request.nextUrl.clone()
     url.pathname = "/auth/login"
     url.searchParams.set("next", pathname)
     return NextResponse.redirect(url)
   }
 
-  if (user && pathname.startsWith("/auth")) {
+  if (user && pathname.startsWith("/auth") && !devPreview) {
     return NextResponse.redirect(new URL("/dashboard", request.url))
   }
 

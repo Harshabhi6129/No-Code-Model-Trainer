@@ -14,7 +14,7 @@ import {
   Database, BrainCircuit, Cpu, BarChart3, Rocket, FileText,
   Settings2, Play, ChevronRight, Plus, Clock, Zap,
   TrendingUp, Download, ArrowRight, Pencil, Check,
-  DollarSign, Sparkles, Info,
+  DollarSign, Sparkles, Info, X,
 } from "lucide-react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -132,6 +132,7 @@ type Action =
   | { type: "ADD"; session: TrainingSession }
   | { type: "SELECT"; id: string }
   | { type: "UPDATE"; id: string; patch: Partial<TrainingSession> }
+  | { type: "DELETE"; id: string }
 
 interface WsState {
   sessions: TrainingSession[]
@@ -280,6 +281,13 @@ function reducer(state: WsState, action: Action): WsState {
           s.id === action.id ? { ...s, ...action.patch } : s
         ),
       }
+    case "DELETE": {
+      const remaining = state.sessions.filter(s => s.id !== action.id)
+      const newActive = state.activeId === action.id
+        ? (remaining[remaining.length - 1]?.id ?? null)
+        : state.activeId
+      return { sessions: remaining, activeId: newActive }
+    }
     default:
       return state
   }
@@ -290,13 +298,14 @@ function reducer(state: WsState, action: Action): WsState {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function SessionSidebar({
-  sessions, activeId, onSelect, onAdd, onAddSweep,
+  sessions, activeId, onSelect, onAdd, onAddSweep, onDelete,
 }: {
   sessions: TrainingSession[]
   activeId: string | null
   onSelect: (id: string) => void
   onAdd: () => void
   onAddSweep: () => void
+  onDelete: (id: string) => void
 }) {
   return (
     <div className="w-52 shrink-0 flex flex-col border-r border-border bg-card/50 h-full">
@@ -329,13 +338,14 @@ function SessionSidebar({
         {sessions.map(s => {
           const badge = STATUS_BADGE[s.status]
           const isActive = s.id === activeId
+          const canDelete = s.status !== "training"
           return (
-            <button
+            <div
               key={s.id}
-              onClick={() => onSelect(s.id)}
-              className={`w-full text-left rounded-lg px-2.5 py-2 transition-colors ${
+              className={`group relative w-full text-left rounded-lg px-2.5 py-2 transition-colors cursor-pointer ${
                 isActive ? "bg-primary/10 text-primary" : "hover:bg-secondary text-foreground"
               }`}
+              onClick={() => onSelect(s.id)}
             >
               <div className="flex items-center justify-between gap-1 mb-0.5">
                 <span className="text-xs font-medium truncate">{s.label}</span>
@@ -344,6 +354,15 @@ function SessionSidebar({
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${badge.cls}`}>
                     {badge.label}
                   </span>
+                  {canDelete && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDelete(s.id) }}
+                      className="opacity-0 group-hover:opacity-100 h-4 w-4 flex items-center justify-center rounded hover:bg-rose-500/20 text-muted-foreground hover:text-rose-400 transition-all"
+                      title="Delete session"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  )}
                 </div>
               </div>
               {s.uploadResult && (
@@ -355,7 +374,7 @@ function SessionSidebar({
               {(s.status === "completed" || s.status === "failed") && s.pipelineCost && (
                 <CostStrip cost={s.pipelineCost} />
               )}
-            </button>
+            </div>
           )
         })}
       </div>
@@ -768,14 +787,14 @@ function SweepConfigPanel({
   const overLimit = combos > SWEEP_MAX_RUNS
 
   function PresetRow<T extends number>({
-    label, presets, key, fmt,
+    label, presets, rangeKey, fmt,
   }: {
     label: string
     presets: T[]
-    key: keyof SweepRanges
+    rangeKey: keyof SweepRanges
     fmt: (v: T) => string
   }) {
-    const sel = new Set(ranges[key] as T[])
+    const sel = new Set(ranges[rangeKey] as T[])
     return (
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">{label}</label>
@@ -785,7 +804,7 @@ function SweepConfigPanel({
             return (
               <button
                 key={String(v)}
-                onClick={() => toggleVal(key, v)}
+                onClick={() => toggleVal(rangeKey, v)}
                 className={`px-2 py-1 rounded border text-[11px] font-mono transition-all ${
                   on ? "border-primary bg-primary/10 text-primary font-semibold"
                      : "border-border text-muted-foreground hover:border-primary/40"
@@ -871,11 +890,11 @@ function SweepConfigPanel({
       <Separator />
 
       {/* Param pickers */}
-      <PresetRow label="Learning Rate"  presets={SWEEP_LR_PRESETS}    key="lrValues"    fmt={v => v.toExponential(0)} />
-      <PresetRow label="Batch Size"     presets={SWEEP_BATCH_PRESETS}  key="batchValues" fmt={v => String(v)} />
-      <PresetRow label="Epochs"         presets={SWEEP_EPOCH_PRESETS}  key="epochValues" fmt={v => String(v)} />
+      <PresetRow label="Learning Rate"  presets={SWEEP_LR_PRESETS}    rangeKey="lrValues"    fmt={v => v.toExponential(0)} />
+      <PresetRow label="Batch Size"     presets={SWEEP_BATCH_PRESETS}  rangeKey="batchValues" fmt={v => String(v)} />
+      <PresetRow label="Epochs"         presets={SWEEP_EPOCH_PRESETS}  rangeKey="epochValues" fmt={v => String(v)} />
       {isLora && (
-        <PresetRow label="LoRA Rank"   presets={SWEEP_LORA_PRESETS}   key="loraRValues" fmt={v => `r=${v}`} />
+        <PresetRow label="LoRA Rank"   presets={SWEEP_LORA_PRESETS}   rangeKey="loraRValues" fmt={v => `r=${v}`} />
       )}
 
       {/* Run count */}
@@ -1964,6 +1983,7 @@ export function TrainClient() {
         onSelect={id => dispatch({ type: "SELECT", id })}
         onAdd={addSession}
         onAddSweep={addSweepSession}
+        onDelete={id => dispatch({ type: "DELETE", id })}
       />
       <div className="flex-1 overflow-hidden">
         {activeSession ? (

@@ -134,12 +134,11 @@ function StatusPill({
 export default async function RunsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  const userId = user?.id ?? ""
 
-  const { data: runs } = await supabase
-    .from("runs")
-    .select("*")
-    .eq("user_id", user!.id)
-    .order("created_at", { ascending: false })
+  const { data: runs } = userId
+    ? await supabase.from("runs").select("*").eq("user_id", userId).order("created_at", { ascending: false })
+    : { data: [] }
 
   const allRuns   = (runs ?? []) as Run[]
 

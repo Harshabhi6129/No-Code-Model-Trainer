@@ -2,14 +2,14 @@ import { AppShell } from "@/components/layout/app-shell"
 import { createClient } from "@/lib/supabase/server"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { StatRing } from "@/components/ui/stat-ring"
+import { DashboardStats } from "@/components/ui/dashboard-stats"
 import { PageHeader } from "@/components/ui/page-header"
 import Link from "next/link"
 import { formatDistanceToNow } from "date-fns"
 import {
-  Plus, Activity, CheckCircle2, Clock, XCircle, Zap, ArrowRight,
-  BarChart3, Cpu, Sparkles, FlaskConical, TrendingUp, Database,
-  LayoutDashboard, DollarSign,
+  Plus, Clock, XCircle, Zap, ArrowRight,
+  CheckCircle2, Activity, Sparkles, FlaskConical, TrendingUp, Database,
+  LayoutDashboard,
 } from "lucide-react"
 import type { Run } from "@/lib/supabase/types"
 
@@ -143,13 +143,11 @@ const quickStart = [
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  const userId = user?.id ?? ""
 
-  const { data: runs } = await supabase
-    .from("runs")
-    .select("*")
-    .eq("user_id", user!.id)
-    .order("created_at", { ascending: false })
-    .limit(8)
+  const { data: runs } = userId
+    ? await supabase.from("runs").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(8)
+    : { data: [] }
 
   const allRuns   = (runs ?? []) as Run[]
   const completed = allRuns.filter((r) => r.status === "completed").length
@@ -190,6 +188,7 @@ export default async function DashboardPage() {
   const hasSpendData = totalApiSpend > 0
 
   const firstName = user?.email?.split("@")[0] ?? "there"
+  // runIds is already set above — only query cost events when userId is present
   const hour      = new Date().getHours()
   const greeting  = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
 
@@ -236,52 +235,20 @@ export default async function DashboardPage() {
         </div>
 
         {/* ── Animated stat rings ─────────────────────────── */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          <StatRing
-            value={allRuns.length}
-            label="Total Runs"
-            icon={Activity}
-            color="indigo"
-            fillPercent={Math.min(allRuns.length * 10, 100)}
-            delay={0}
-          />
-          <StatRing
-            value={completed}
-            label="Completed"
-            icon={CheckCircle2}
-            color="emerald"
-            fillPercent={allRuns.length > 0 ? (completed / allRuns.length) * 100 : 0}
-            sub={allRuns.length > 0 ? `${Math.round((completed / allRuns.length) * 100)}% success rate` : undefined}
-            delay={80}
-          />
-          <StatRing
-            value={running + pending}
-            label="In Progress"
-            icon={Cpu}
-            color="cyan"
-            fillPercent={(running + pending) > 0 ? 70 : 0}
-            sub={running > 0 ? `${running} training` : pending > 0 ? `${pending} queued` : undefined}
-            delay={160}
-          />
-          <StatRing
-            value={completed > 0 ? `${(avgAcc * 100).toFixed(1)}%` : "—"}
-            label="Avg Accuracy"
-            icon={BarChart3}
-            color="violet"
-            fillPercent={avgAcc * 100}
-            sub={completed > 0 ? `over ${completed} run${completed !== 1 ? "s" : ""}` : "no data yet"}
-            delay={240}
-          />
-          <StatRing
-            value={hasSpendData ? `$${totalApiSpend.toFixed(2)}` : "$—"}
-            label="API Spend"
-            icon={DollarSign}
-            color="amber"
-            fillPercent={hasSpendData ? Math.min((totalApiSpend / 5) * 100, 100) : 0}
-            sub={hasSpendData ? `${avgCacheRatio}% cache hits` : "no data yet"}
-            delay={320}
-          />
-        </div>
+        <DashboardStats
+          totalRuns={allRuns.length}
+          completed={completed}
+          successRate={allRuns.length > 0 ? (completed / allRuns.length) * 100 : 0}
+          inProgress={running + pending}
+          running={running}
+          pending={pending}
+          avgAccDisplay={completed > 0 ? `${(avgAcc * 100).toFixed(1)}%` : "—"}
+          avgAccFill={avgAcc * 100}
+          apiSpendDisplay={hasSpendData ? `$${totalApiSpend.toFixed(2)}` : "$—"}
+          apiSpendFill={hasSpendData ? Math.min((totalApiSpend / 5) * 100, 100) : 0}
+          cacheRatio={avgCacheRatio}
+          hasSpendData={hasSpendData}
+        />
 
         {/* ── Recent runs ────────────────────────────────── */}
         <div className="space-y-3">

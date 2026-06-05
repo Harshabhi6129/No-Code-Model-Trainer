@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { cn } from "@/lib/utils"
 
-const RADIUS       = 30
+const RADIUS       = 26
 const STROKE_WIDTH = 3
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 
@@ -14,13 +14,14 @@ const spectrum: Record<SpectrumColor, {
   glow: string
   textClass: string
   bgClass: string
-  trackClass: string
+  glowRgba: string
+  borderHover: string
 }> = {
-  indigo:  { stroke: "hsl(239 84% 67%)", glow: "hsl(239 84% 67% / 0.5)",  textClass: "text-indigo-300",  bgClass: "bg-indigo-500/10",  trackClass: "stroke-indigo-950"  },
-  violet:  { stroke: "hsl(262 84% 70%)", glow: "hsl(262 84% 70% / 0.5)",  textClass: "text-violet-300",  bgClass: "bg-violet-500/10",  trackClass: "stroke-violet-950"  },
-  cyan:    { stroke: "hsl(187 96% 58%)", glow: "hsl(187 96% 58% / 0.45)", textClass: "text-cyan-300",    bgClass: "bg-cyan-500/10",    trackClass: "stroke-cyan-950"    },
-  emerald: { stroke: "hsl(160 64% 52%)", glow: "hsl(160 64% 52% / 0.45)", textClass: "text-emerald-300", bgClass: "bg-emerald-500/10", trackClass: "stroke-emerald-950" },
-  amber:   { stroke: "hsl(38 92% 58%)",  glow: "hsl(38 92% 58% / 0.45)",  textClass: "text-amber-300",   bgClass: "bg-amber-500/10",   trackClass: "stroke-amber-950"   },
+  indigo:  { stroke: "#818CF8", glow: "rgba(129,140,248,0.5)",  textClass: "text-indigo-300",  bgClass: "bg-indigo-500/12",  glowRgba: "rgba(99,102,241,0.4)",  borderHover: "99,102,241"  },
+  violet:  { stroke: "#A78BFA", glow: "rgba(167,139,250,0.5)",  textClass: "text-violet-300",  bgClass: "bg-violet-500/12",  glowRgba: "rgba(139,92,246,0.4)",  borderHover: "139,92,246"  },
+  cyan:    { stroke: "#22D3EE", glow: "rgba(34,211,238,0.45)",  textClass: "text-cyan-300",    bgClass: "bg-cyan-500/12",    glowRgba: "rgba(6,182,212,0.35)",  borderHover: "6,182,212"   },
+  emerald: { stroke: "#34D399", glow: "rgba(52,211,153,0.45)",  textClass: "text-emerald-300", bgClass: "bg-emerald-500/12", glowRgba: "rgba(16,185,129,0.35)", borderHover: "16,185,129"  },
+  amber:   { stroke: "#FBBF24", glow: "rgba(251,191,36,0.45)",  textClass: "text-amber-300",   bgClass: "bg-amber-500/12",   glowRgba: "rgba(245,158,11,0.35)", borderHover: "245,158,11"  },
 }
 
 interface StatRingProps {
@@ -42,12 +43,11 @@ export function StatRing({
   sub,
   delay = 0,
 }: StatRingProps) {
-  const [mounted, setMounted]     = useState(false)
-  const [visible, setVisible]     = useState(false)
-  const ringRef                   = useRef<SVGCircleElement>(null)
-  const c                         = spectrum[color]
-  const clampedFill               = Math.min(Math.max(fillPercent, 0), 100)
-  const targetOffset              = CIRCUMFERENCE - (clampedFill / 100) * CIRCUMFERENCE
+  const [mounted, setMounted] = useState(false)
+  const [visible, setVisible] = useState(false)
+  const c                     = spectrum[color]
+  const clampedFill           = Math.min(Math.max(fillPercent, 0), 100)
+  const targetOffset          = CIRCUMFERENCE - (clampedFill / 100) * CIRCUMFERENCE
 
   useEffect(() => {
     setMounted(true)
@@ -58,32 +58,40 @@ export function StatRing({
   return (
     <div
       className={cn(
-        "group relative flex items-center gap-4 rounded-xl border border-border p-5 overflow-hidden transition-all duration-300",
-        "hover:border-border-bright hover:shadow-lg",
+        "group relative flex flex-col items-center text-center gap-2 rounded-xl p-4 overflow-hidden transition-all duration-300",
         visible ? "animate-slide-up opacity-100" : "opacity-0"
       )}
       style={{
-        background: "linear-gradient(135deg, hsl(var(--surface)) 0%, hsl(var(--surface-elevated) / 0.7) 100%)",
+        background: "rgba(12, 20, 32, 0.60)",
+        backdropFilter: "blur(20px) saturate(1.6)",
+        WebkitBackdropFilter: "blur(20px) saturate(1.6)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.06)",
         transitionDelay: `${delay}ms`,
+        minHeight: 140,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = `rgba(${c.borderHover},0.35)`
+        e.currentTarget.style.transform = "translateY(-2px)"
+        e.currentTarget.style.boxShadow = `0 12px 40px rgba(0,0,0,0.4), 0 0 24px -8px ${c.glowRgba}, inset 0 1px 0 rgba(255,255,255,0.08)`
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)"
+        e.currentTarget.style.transform = "translateY(0)"
+        e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.06)"
       }}
     >
-      {/* Subtle corner glow on hover */}
+      {/* Corner glow */}
       <div
-        className="absolute -top-8 -right-8 h-24 w-24 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none blur-2xl"
+        className="absolute -top-6 -right-6 h-20 w-20 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none blur-2xl"
         style={{ background: c.glow }}
       />
 
-      {/* SVG ring */}
-      <div className="relative shrink-0" style={{ width: 72, height: 72 }}>
-        <svg
-          width={72}
-          height={72}
-          viewBox="0 0 72 72"
-          className="-rotate-90"
-          aria-hidden
-        >
+      {/* SVG ring with icon inside */}
+      <div className="relative shrink-0" style={{ width: 64, height: 64 }}>
+        <svg width={64} height={64} viewBox="0 0 64 64" className="-rotate-90" aria-hidden>
           <defs>
-            <filter id={`glow-${color}`}>
+            <filter id={`ring-glow-${color}`}>
               <feGaussianBlur stdDeviation="2" result="blur" />
               <feMerge>
                 <feMergeNode in="blur" />
@@ -91,28 +99,21 @@ export function StatRing({
               </feMerge>
             </filter>
           </defs>
-
-          {/* Background track */}
+          {/* Track */}
+          <circle cx={32} cy={32} r={RADIUS} fill="none"
+            stroke="rgba(255,255,255,0.07)" strokeWidth={STROKE_WIDTH} />
+          {/* Fill arc */}
           <circle
-            cx={36} cy={36} r={RADIUS}
-            fill="none"
-            stroke="hsl(var(--border))"
-            strokeWidth={STROKE_WIDTH}
-          />
-
-          {/* Filled arc */}
-          <circle
-            ref={ringRef}
-            cx={36} cy={36} r={RADIUS}
+            cx={32} cy={32} r={RADIUS}
             fill="none"
             stroke={c.stroke}
             strokeWidth={STROKE_WIDTH}
             strokeLinecap="round"
             strokeDasharray={CIRCUMFERENCE}
             strokeDashoffset={mounted ? targetOffset : CIRCUMFERENCE}
-            filter={`url(#glow-${color})`}
+            filter={`url(#ring-glow-${color})`}
             style={{
-              transition: `stroke-dashoffset 1.1s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay + 100}ms`,
+              transition: `stroke-dashoffset 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay + 100}ms`,
               filter: `drop-shadow(0 0 5px ${c.glow})`,
             }}
           />
@@ -120,23 +121,25 @@ export function StatRing({
 
         {/* Icon centered in ring */}
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg", c.bgClass)}>
-            <Icon className={cn("h-4 w-4", c.textClass)} />
+          <div className={cn("flex h-7 w-7 items-center justify-center rounded-lg", c.bgClass)}>
+            <Icon className={cn("h-3.5 w-3.5", c.textClass)} />
           </div>
         </div>
       </div>
 
-      {/* Text */}
-      <div className="flex-1 min-w-0">
-        <p
-          className={cn("text-3xl font-bold font-mono tracking-tight leading-none animate-count-up", c.textClass)}
-          style={{ animationDelay: `${delay + 200}ms` }}
-        >
-          {value}
-        </p>
-        <p className="text-sm font-semibold text-foreground mt-1.5 tracking-tight">{label}</p>
+      {/* Value */}
+      <p
+        className={cn("text-2xl font-bold font-mono tracking-tight leading-none animate-count-up", c.textClass)}
+        style={{ animationDelay: `${delay + 200}ms` }}
+      >
+        {value}
+      </p>
+
+      {/* Label + sub */}
+      <div className="space-y-0.5">
+        <p className="text-xs font-semibold text-foreground tracking-tight leading-tight">{label}</p>
         {sub && (
-          <p className="text-xs text-muted-foreground mt-0.5 font-mono">{sub}</p>
+          <p className="text-[10px] text-muted-foreground font-mono leading-tight">{sub}</p>
         )}
       </div>
     </div>
