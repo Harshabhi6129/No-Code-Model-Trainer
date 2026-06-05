@@ -23,12 +23,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ModelForge API", version="0.3.0")
 
-_CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGIN", "http://localhost:3000").split(",") if o.strip()]
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGIN", "http://localhost:3000,http://localhost:3456").split(",")
+    if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    # Covers *.vercel.app (Vercel frontend) and *.hf.space (HuggingFace Spaces iframe/API)
+    allow_origin_regex=r"https://(.*\.vercel\.app|.*\.hf\.space)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

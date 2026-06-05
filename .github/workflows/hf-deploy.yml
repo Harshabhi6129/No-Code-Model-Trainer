@@ -1,0 +1,31 @@
+name: Deploy to HuggingFace Spaces
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Format: your-hf-username/your-space-name  (e.g. harsha/modelforge-backend)
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          git config --global user.email "github-action@modelforge.ai"
+          git config --global user.name  "ModelForge CI"
+
+          # Add the HF Space as a remote and force-push
+          git remote add space \
+            "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID}"
+
+          git push space main --force
