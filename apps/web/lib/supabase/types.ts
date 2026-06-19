@@ -42,6 +42,11 @@ export interface Database {
         Insert: { id?: number; run_id: string; event_type: string; data?: Json; created_at?: string }
         Update: { id?: number; run_id?: string; event_type?: string; data?: Json; created_at?: string }
       }
+      training_sessions: {
+        Row: { user_id: string; data: Json; updated_at: string }
+        Insert: { user_id: string; data?: Json; updated_at?: string }
+        Update: { user_id?: string; data?: Json; updated_at?: string }
+      }
     }
   }
 }
