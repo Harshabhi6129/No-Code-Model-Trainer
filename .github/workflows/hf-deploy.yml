@@ -1,12 +1,59 @@
-name: Deploy to HuggingFace Spaces
+name: CI / Deploy to HuggingFace Spaces
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:   # allow manual trigger from GitHub UI
 
 jobs:
+  # ── Gate: tests + type-check + build must pass before any deploy ──────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run agent test suite
+        working-directory: agents
+        run: python -m pytest tests/ -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      # Run from the workspace root using the repo's own scripts, matching how
+      # the project actually builds locally. The lockfile lives under apps/web,
+      # so a non-frozen install is used to avoid root-lockfile false failures.
+      - name: Install web dependencies
+        run: pnpm install
+
+      - name: Type-check
+        run: pnpm type-check
+
+      - name: Build
+        run: pnpm build
+
+  # ── Deploy: only on push to main, and only after `test` passes ────────────────
   deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

@@ -7,8 +7,8 @@ A conversational, agent-native platform that turns a plain-English problem descr
 **Not** another form-filling AutoML tool. **Yes** to: transparent AI, forkable experiments, real-time streaming, and models that go straight to production.
 
 ## Architecture
-apps/web/ Next.js 15 App Router — conversational UI + dashboard
-backend/ FastAPI — job queue API, WebSocket streaming
+apps/web/ Next.js 16 App Router — conversational UI + dashboard
+backend/ FastAPI — SSE streaming API + Supabase-authenticated endpoints
 agents/ Claude Agent SDK — orchestrated training pipeline
 intent_agent Translates user intent → formal task spec
 data_agent Ingest, profile, validate, clean datasets
@@ -16,22 +16,25 @@ model_agent Selects base model + training recipe
 train_agent Runs training, monitors, auto-recovers
 eval_agent Generates eval suite, reports calibrated metrics
 deploy_agent Publishes to HF Hub / Modal / Replicate endpoint
-packages/
-ml/ Core ML: HuggingFace + Unsloth LoRA/QLoRA + vLLM
+agents/agents/ml_core.py Core ML: HuggingFace transformers + PEFT LoRA/QLoRA
 
 ## Tech Stack
-| Layer | Choice | Why |
+
+> ⚠️ This table reflects what is **actually shipped today**. Items marked
+> *(roadmap)* are aspirational and NOT yet wired — don't reach for them in code.
+
+| Layer | Shipped today | Notes |
 |---|---|---|
-| Frontend | Next.js 15 App Router + shadcn/ui + Tailwind | SSR, file-based routing, one styling system |
-| Backend | FastAPI + async job queue (Modal or Celery+Redis) | Long training jobs need proper queuing |
-| Agents | Claude Agent SDK (Python), claude-sonnet-4-6 by default | Native tool use, streaming, MCP integration |
-| ML Core | transformers + Unsloth (LoRA/QLoRA) + vLLM | 2-5x faster LoRA, production-grade inference |
-| Database | Postgres (Neon) + S3/R2 for model artifacts | Experiments, users, run history |
-| Auth | Clerk | Skip rolling your own |
-| Billing | Stripe (usage-based: GPU-minutes) | Models cost real money to train |
-| GPU Compute | Modal (serverless GPU) | No infra to manage, scales to zero |
-| Observability | Langfuse (agent traces) + Sentry + W&B (training runs) | Full visibility |
-| Deploy | Vercel (frontend) + Modal (backend + GPU) | Unified, scales to zero |
+| Frontend | Next.js 16 App Router (Turbopack) + Tailwind | Server Components by default |
+| Backend | FastAPI, training runs as in-process async tasks | Durable job queue *(roadmap — see issues #22/#23)* |
+| Agents | Claude Agent SDK (Python), claude-sonnet-4-6 by default | 7-agent pipeline, SSE streaming |
+| ML Core | transformers + PEFT (LoRA/QLoRA/full) + scikit-learn | `agents/agents/ml_core.py`; Unsloth/vLLM *(roadmap)* |
+| Database | **Supabase** (Postgres + RLS) | `supabase/migrations/`; artifacts on local disk under `agents/runs/` |
+| Auth | **Supabase Auth** (email/password) | `apps/web/lib/supabase/`, `apps/web/proxy.ts`; backend verifies the JWT via `backend/auth.py` |
+| GPU Compute | Local CPU/GPU; Modal H100 dispatch when configured | `agents/services/modal_runner.py` |
+| Billing | — | Stripe usage-based GPU-minutes *(roadmap — see issue #29)* |
+| Observability | LangSmith / JSONL tracing (best-effort) | Sentry / W&B *(roadmap)* |
+| Deploy | Vercel (frontend) + HuggingFace Spaces (backend, Docker) | `.github/workflows/hf-deploy.yml` |
 
 ## Supported ML Tasks (v0 → v1 roadmap)
 - **v0.1** Text classification with LoRA (encoder models — BERT, RoBERTa, DeBERTa)
@@ -79,18 +82,20 @@ pnpm dev
 ```
 # apps/web/.env.local
 NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
-CLERK_SECRET_KEY=
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 # backend/.env
-DATABASE_URL=
 ANTHROPIC_API_KEY=
-HUGGINGFACE_TOKEN=
-MODAL_TOKEN_ID=
-MODAL_TOKEN_SECRET=
-WANDB_API_KEY=
-STRIPE_SECRET_KEY=
-SENTRY_DSN=
+# Supabase — required for backend auth (token verification + ownership checks)
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+REQUIRE_AUTH=false          # flip to true once the frontend ships the auth header
+CORS_ORIGIN=                # comma-separated exact frontend origins
+HUGGINGFACE_TOKEN=          # optional — DeployAgent HF Hub push
+# Roadmap / optional: MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, WANDB_API_KEY,
+# STRIPE_SECRET_KEY, SENTRY_DSN
 ```
 
 ## Coding Conventions
