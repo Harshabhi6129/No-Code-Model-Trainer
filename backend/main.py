@@ -30,14 +30,23 @@ _CORS_ORIGINS = [
     if o.strip()
 ]
 
+# Project-scoped regex: production + this project's Vercel PREVIEW deployments
+# only (e.g. no-code-model-trainer-git-feature.vercel.app) — NOT every
+# *.vercel.app / *.hf.space, which previously let any site on those hosts make
+# credentialed requests. Override via CORS_ORIGIN_REGEX, or add exact origins
+# through CORS_ORIGIN.
+_CORS_ORIGIN_REGEX = os.getenv(
+    "CORS_ORIGIN_REGEX",
+    r"https://no-code-model-trainer[a-z0-9-]*\.vercel\.app",
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
-    # Covers *.vercel.app (Vercel frontend) and *.hf.space (HuggingFace Spaces iframe/API)
-    allow_origin_regex=r"https://(.*\.vercel\.app|.*\.hf\.space)",
+    allow_origin_regex=_CORS_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 UPLOADS_DIR = Path(os.getenv("UPLOAD_DIR", str(Path(__file__).parent / "uploads")))
@@ -113,6 +122,80 @@ def _assert_run_owner(run_id: str, user: dict[str, Any] | None) -> None:
     rows = res.data or []
     if rows and rows[0].get("user_id") and rows[0]["user_id"] != user.get("id"):
         raise HTTPException(403, "You do not have access to this run.")
+
+
+# ── Per-user quotas (issue #29) ──────────────────────────────────────────────
+_MAX_CONCURRENT_RUNS = int(os.getenv("MAX_CONCURRENT_RUNS", "2"))
+_MAX_DAILY_RUNS      = int(os.getenv("MAX_DAILY_RUNS", "25"))
+# Only recent runs count toward the concurrency cap, so an orphaned 'running'
+# row (until the #22 reconciliation lands) can't lock a user out permanently.
+_ACTIVE_RUN_WINDOW_HOURS = 6
+
+
+def _enforce_quota(
+    user: dict[str, Any] | None,
+    new_runs: int = 1,
+    exclude_run_id: str | None = None,
+) -> None:
+    """
+    Reject the request (429) if starting `new_runs` would exceed the user's
+    concurrency or daily run quota. Best-effort: skipped when unauthenticated
+    or Supabase is unavailable, so it never blocks the permissive rollout phase.
+    """
+    if not user:
+        return
+    uid = user.get("id")
+    if not uid:
+        return
+    sb = _service_client()
+    if sb is None:
+        return
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+
+    try:
+        active_cut = (now - timedelta(hours=_ACTIVE_RUN_WINDOW_HOURS)).isoformat()
+        q = (
+            sb.table("runs").select("id", count="exact")
+            .eq("user_id", uid)
+            .in_("status", ["pending", "running"])
+            .gte("created_at", active_cut)
+        )
+        if exclude_run_id:
+            q = q.neq("id", exclude_run_id)
+        active = q.execute().count or 0
+    except Exception as exc:
+        logger.warning("[quota] concurrency check failed for %s: %s", uid, exc)
+        return
+
+    if active + new_runs > _MAX_CONCURRENT_RUNS:
+        raise HTTPException(
+            429,
+            f"You already have {active} run(s) in progress (limit "
+            f"{_MAX_CONCURRENT_RUNS}). Wait for one to finish before starting more.",
+        )
+
+    try:
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        q = (
+            sb.table("runs").select("id", count="exact")
+            .eq("user_id", uid)
+            .gte("created_at", day_start)
+        )
+        if exclude_run_id:
+            q = q.neq("id", exclude_run_id)
+        today = q.execute().count or 0
+    except Exception as exc:
+        logger.warning("[quota] daily check failed for %s: %s", uid, exc)
+        return
+
+    if today + new_runs > _MAX_DAILY_RUNS:
+        raise HTTPException(
+            429,
+            f"Daily run limit reached ({_MAX_DAILY_RUNS} runs/day). "
+            "This resets at 00:00 UTC.",
+        )
 
 
 from services.socket_manager import manager as socket_manager
@@ -405,6 +488,9 @@ async def chat(
     """
     if req.run_id:
         _assert_run_owner(req.run_id, user)
+    # Don't count a resume of an already-running run against the quota.
+    if not req.resume_from_run_id:
+        _enforce_quota(user, new_runs=1, exclude_run_id=req.run_id)
     dataset_path = _resolve_file_id(req.file_id)
     _agents_import()
 
@@ -828,6 +914,8 @@ async def launch_sweep(
             f"Sweep would produce {len(combos)} runs (max {_SWEEP_MAX_RUNS}). "
             "Reduce the number of values per parameter."
         )
+
+    _enforce_quota(user, new_runs=len(combos))
 
     sweep_id     = str(uuid.uuid4())
     dataset_path = _resolve_file_id(req.file_id)
