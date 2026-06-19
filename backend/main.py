@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,10 +60,19 @@ RUNS_DIR = Path(os.getenv("RUNS_DIR", str(Path(__file__).parent.parent / "agents
 # Rebuilt from .meta.json sidecars on startup so it survives server restarts.
 _FILE_REGISTRY: dict[str, Path] = {}
 
-# Pending clarifications: run_id → original ChatRequest params.
+# Pending clarifications: run_id → original ChatRequest params (+ "_expires_at").
 # Populated when IntentAgent returns confidence < 0.7 and asks a clarifying question.
 # Consumed (and removed) by POST /clarify/{run_id}.
+# TTL-bounded so abandoned clarifications don't accumulate forever (issue #23).
 _pending_clarifications: dict[str, dict] = {}
+_CLARIFICATION_TTL_SECONDS  = int(os.getenv("CLARIFICATION_TTL_SECONDS", "3600"))
+_MAX_PENDING_CLARIFICATIONS = 500
+
+
+def _purge_expired_clarifications() -> None:
+    now = time.monotonic()
+    for k in [k for k, v in _pending_clarifications.items() if v.get("_expires_at", 0) < now]:
+        _pending_clarifications.pop(k, None)
 
 
 def _rebuild_registry_from_disk() -> None:
@@ -577,12 +587,20 @@ async def chat(
                     and result.output.get("clarification_needed")
                     and req.run_id
                 ):
+                    _purge_expired_clarifications()
+                    if len(_pending_clarifications) >= _MAX_PENDING_CLARIFICATIONS:
+                        oldest = min(
+                            _pending_clarifications,
+                            key=lambda k: _pending_clarifications[k].get("_expires_at", 0),
+                        )
+                        _pending_clarifications.pop(oldest, None)
                     _pending_clarifications[req.run_id] = {
                         "message":                  req.message,
                         "file_id":                  req.file_id,
                         "hyperparameter_overrides": req.hyperparameter_overrides,
                         "hf_token":                 req.hf_token,
                         "clarification_question":   result.output["clarification_needed"],
+                        "_expires_at":              time.monotonic() + _CLARIFICATION_TTL_SECONDS,
                     }
                     logger.info(
                         "[%s] Clarification needed — run paused awaiting user response",
@@ -647,6 +665,8 @@ async def clarify_intent(
     restarts from IntentAgent with the enriched intent. Returns SSE.
     """
     params = _pending_clarifications.pop(run_id, None)
+    if params is not None and params.get("_expires_at", 0) < time.monotonic():
+        params = None  # expired — treat as not found
     if params is None:
         raise HTTPException(
             404,

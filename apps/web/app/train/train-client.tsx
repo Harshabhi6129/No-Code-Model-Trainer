@@ -1599,9 +1599,32 @@ function EmptyWorkspace({ onAdd }: { onAdd: () => void }) {
 // Main export
 // ──────────────────────────────────────────────────────────────────────────────
 
+// Recover interrupted sessions + drop ones completed/failed > 7 days ago.
+// Used for both localStorage and cloud-restored (issue #28) session lists.
+function reconcileSessions(raw: TrainingSession[]): { sessions: TrainingSession[]; staleCleaned: number } {
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
+  const now = Date.now()
+  let staleCleaned = 0
+  const sessions = raw
+    .map((s) => ({
+      ...s,
+      status: s.status === "training" ? "failed" : s.status,
+      errorMessage: s.status === "training"
+        ? (s.errorMessage ?? "Session interrupted. Try starting training again.")
+        : s.errorMessage,
+    }))
+    .filter((s) => {
+      const stale = (s.status === "completed" || s.status === "failed") && now - s.createdAt > SEVEN_DAYS
+      if (stale) staleCleaned++
+      return !stale
+    })
+  return { sessions, staleCleaned }
+}
+
 export function TrainClient() {
   const supabase = createClient()
   const [state, dispatch] = useReducer(reducer, { sessions: [], activeId: null })
+  const cloudSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Messages and epoch metrics stored outside reducer: not serialized to localStorage
   const [liveMessages,      setLiveMessages]      = useState<Record<string, AgentMessage[]>>({})
   const [liveEpochMetrics,  setLiveEpochMetrics]  = useState<Record<string, EpochPoint[]>>({})
@@ -1624,29 +1647,16 @@ export function TrainClient() {
     if (hydratedRef.current) return
     hydratedRef.current = true
 
+    let hadSessions = false
+    let prefillAdded = false
+
     try {
       const raw = localStorage.getItem(LS_KEY)
       if (raw) {
-        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
-        const now = Date.now()
-        let staleCleaned = 0
-        const parsed: TrainingSession[] = JSON.parse(raw)
-          .map((s: TrainingSession) => ({
-            ...s,
-            // Recover sessions that were mid-stream when page was closed
-            status: s.status === "training" ? "failed" : s.status,
-            errorMessage: s.status === "training"
-              ? (s.errorMessage ?? "Session interrupted. Try starting training again.")
-              : s.errorMessage,
-          }))
-          .filter((s: TrainingSession) => {
-            const stale = (s.status === "completed" || s.status === "failed") &&
-              now - s.createdAt > SEVEN_DAYS
-            if (stale) staleCleaned++
-            return !stale
-          })
+        const { sessions: parsed, staleCleaned } = reconcileSessions(JSON.parse(raw))
         const firstId = parsed[0]?.id ?? null
         dispatch({ type: "HYDRATE", sessions: parsed, activeId: firstId })
+        hadSessions = parsed.length > 0
         if (staleCleaned > 0) {
           setTimeout(() => toast.info(`${staleCleaned} old session${staleCleaned > 1 ? "s" : ""} cleaned up`), 1200)
         }
@@ -1665,6 +1675,7 @@ export function TrainClient() {
         })
         dispatch({ type: "ADD", session })
         dispatch({ type: "SELECT", id: session.id })
+        prefillAdded = true
       }
     } catch { /* ignore */ }
 
@@ -1681,6 +1692,7 @@ export function TrainClient() {
         const session = makeSession({ uploadResult, setupSubstep: "analyzing", label })
         dispatch({ type: "ADD", session })
         dispatch({ type: "SELECT", id: session.id })
+        prefillAdded = true
       }
     } catch { /* ignore */ }
 
@@ -1716,15 +1728,57 @@ export function TrainClient() {
         })
         dispatch({ type: "ADD", session })
         dispatch({ type: "SELECT", id: session.id })
+        prefillAdded = true
       }
     } catch { /* ignore */ }
+
+    // Cross-device restore (issue #28): if this device has no local sessions and
+    // nothing was prefilled, pull the user's sessions from the cloud backup.
+    if (!hadSessions && !prefillAdded) {
+      ;(async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser()
+          if (!user) return
+          const { data } = await (supabase as any)
+            .from("training_sessions")
+            .select("data")
+            .eq("user_id", user.id)
+            .maybeSingle()
+          const raw = (data?.data ?? []) as TrainingSession[]
+          if (!Array.isArray(raw) || raw.length === 0) return
+          const { sessions } = reconcileSessions(raw)
+          if (sessions.length > 0) {
+            dispatch({ type: "HYDRATE", sessions, activeId: sessions[0]?.id ?? null })
+            toast.info("Restored your sessions from the cloud")
+          }
+        } catch { /* offline or not signed in — localStorage is the source of truth */ }
+      })()
+    }
   }, [])
 
-  // Persist sessions to localStorage on every change
+  // Persist sessions to localStorage on every change, and (debounced) back them
+  // up to the cloud for cross-device restore (issue #28). Cloud sync is
+  // best-effort: if it fails or the user is signed out, localStorage still works.
   useEffect(() => {
     if (!hydratedRef.current) return
     if (state.sessions.length === 0) return
     localStorage.setItem(LS_KEY, JSON.stringify(state.sessions))
+
+    if (cloudSyncTimer.current) clearTimeout(cloudSyncTimer.current)
+    const snapshot = state.sessions
+    cloudSyncTimer.current = setTimeout(() => {
+      ;(async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser()
+          if (!user) return
+          await (supabase as any).from("training_sessions").upsert({
+            user_id: user.id,
+            data: snapshot,
+            updated_at: new Date().toISOString(),
+          })
+        } catch { /* best-effort cloud backup */ }
+      })()
+    }, 2000)
   }, [state.sessions])
 
   function addSession() {
