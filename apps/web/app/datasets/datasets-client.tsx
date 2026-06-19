@@ -9,6 +9,7 @@ import {
   ArrowRight, Loader2, Trash2, RefreshCw, Pencil, Check, X,
 } from "lucide-react"
 import { toast } from "sonner"
+import { authHeader } from "@/lib/api"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const LS_SESSIONS = "modelforge_sessions_v2"
@@ -114,7 +115,10 @@ export function DatasetsClient() {
 
   async function handleDelete(file_id: string) {
     try {
-      await fetch(`${API_URL}/datasets/${file_id}`, { method: "DELETE" })
+      await fetch(`${API_URL}/datasets/${file_id}`, {
+        method: "DELETE",
+        headers: { ...(await authHeader()) },
+      })
     } catch { /* backend offline — still clean localStorage */ }
 
     try {
@@ -141,7 +145,7 @@ export function DatasetsClient() {
     try {
       await fetch(`${API_URL}/datasets/${file_id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body: JSON.stringify({ filename: trimmed }),
       })
     } catch {}
