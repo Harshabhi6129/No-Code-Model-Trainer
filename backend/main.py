@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +132,15 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     }))
 
     try:
-        df = pd.read_csv(dest) if suffix == ".csv" else pd.read_json(dest)
+        if suffix == ".csv":
+            df = pd.read_csv(dest)
+        elif suffix == ".jsonl":
+            df = pd.read_json(dest, lines=True)
+        elif suffix == ".json":
+            df = pd.read_json(dest)
+        else:  # .txt — one text record per non-empty line
+            lines = [ln for ln in dest.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            df = pd.DataFrame({"text": lines})
     except Exception as exc:
         dest.unlink(missing_ok=True)
         meta_file.unlink(missing_ok=True)
@@ -723,7 +731,7 @@ async def _run_sweep_child(
                 },
                 "artifact_path": train_out.get("artifact_path"),
                 "sweep_config":  sweep_config_combo,
-                "completed_at":  datetime.utcnow().isoformat() + "Z",
+                "completed_at":  datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
         except Exception as exc:
             logger.warning("[sweep][%s] failed to update run record: %s", run_id, exc)
@@ -849,8 +857,13 @@ def _validate_artifact_path(artifact_path: str, run_id: str) -> Path:
     # Also allow paths relative to the agents directory (agent pipeline output)
     agents_runs = (Path(__file__).parent.parent / "agents" / "runs").resolve()
 
-    if not (str(resolved).startswith(str(runs_resolved)) or
-            str(resolved).startswith(str(agents_runs))):
+    def _within(child: Path, parent: Path) -> bool:
+        # True if child is the dir itself or genuinely nested under it.
+        # Path containment (not string prefix) so a sibling like `runs_evil`
+        # cannot satisfy the check by sharing a name prefix.
+        return child == parent or parent in child.parents
+
+    if not (_within(resolved, runs_resolved) or _within(resolved, agents_runs)):
         logger.warning(
             "Rejected artifact_path outside RUNS_DIR: run_id=%s path=%s",
             run_id, artifact_path,
