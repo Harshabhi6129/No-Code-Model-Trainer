@@ -158,7 +158,7 @@ def _blocking_train(
         save_strategy="epoch",
         eval_strategy="no",
         report_to="none",
-        no_cuda=(device_str == "cpu"),
+        use_cpu=(device_str == "cpu"),
         disable_tqdm=True,
     )
 

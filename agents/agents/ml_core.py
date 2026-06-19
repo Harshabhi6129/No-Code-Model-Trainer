@@ -599,7 +599,7 @@ def _blocking_train(
         elif cap[0] >= 7:
             use_fp16 = True    # Volta / Turing (V100, RTX 2000)
 
-    no_cuda = (device_str != "cuda")
+    use_cpu = (device_str != "cuda")
     log_steps = max(1, len(train_ds) // max(1, batch_size * 4))
 
     # ── Training args ─────────────────────────────────────────────────────────
@@ -620,7 +620,7 @@ def _blocking_train(
         logging_steps=log_steps,
         save_total_limit=1,
         report_to="none",
-        no_cuda=no_cuda,
+        use_cpu=use_cpu,
         fp16=use_fp16,
         bf16=use_bf16,
         dataloader_pin_memory=(device_str == "cuda"),
@@ -694,7 +694,7 @@ def _blocking_train(
                 logging_steps=log_steps,
                 save_total_limit=1,
                 report_to="none",
-                no_cuda=no_cuda,
+                use_cpu=use_cpu,
                 fp16=use_fp16,
                 bf16=use_bf16,
                 gradient_checkpointing=True,   # ← recompute activations; halves VRAM
