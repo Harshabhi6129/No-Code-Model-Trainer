@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Depends
 from starlette.background import BackgroundTask
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -75,6 +75,46 @@ def _rebuild_registry_from_disk() -> None:
 
 _rebuild_registry_from_disk()
 
+from auth import get_current_user
+
+
+def _service_client():
+    """Return a service-role Supabase client, or None if not configured."""
+    url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception as exc:
+        logger.warning("Could not init Supabase service client: %s", exc)
+        return None
+
+
+def _assert_run_owner(run_id: str, user: dict[str, Any] | None) -> None:
+    """
+    Reject the request if `user` is not the owner of `run_id`.
+
+    Best-effort: when no user is attached (permissive rollout phase) or Supabase
+    is not configured, the check is skipped. When a verified user IS present and
+    the run is owned by someone else, raise 403.
+    """
+    if not user:
+        return
+    sb = _service_client()
+    if sb is None:
+        return
+    try:
+        res = sb.table("runs").select("user_id").eq("id", run_id).limit(1).execute()
+    except Exception as exc:
+        logger.warning("Ownership lookup failed for run %s: %s", run_id, exc)
+        return
+    rows = res.data or []
+    if rows and rows[0].get("user_id") and rows[0]["user_id"] != user.get("id"):
+        raise HTTPException(403, "You do not have access to this run.")
+
+
 from services.socket_manager import manager as socket_manager
 
 
@@ -92,7 +132,10 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
 
 
 @app.post("/upload")
-async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_dataset(
+    file: UploadFile = File(...),
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, Any]:
     """
     Upload a dataset file. Returns metadata including sample rows, class
     distribution, and data quality warnings — all without hitting the GPU.
@@ -132,7 +175,15 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     }))
 
     try:
-        df = pd.read_csv(dest) if suffix == ".csv" else pd.read_json(dest)
+        if suffix == ".csv":
+            df = pd.read_csv(dest)
+        elif suffix == ".jsonl":
+            df = pd.read_json(dest, lines=True)
+        elif suffix == ".json":
+            df = pd.read_json(dest)
+        else:  # .txt — one text record per non-empty line
+            lines = [ln for ln in dest.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            df = pd.DataFrame({"text": lines})
     except Exception as exc:
         dest.unlink(missing_ok=True)
         meta_file.unlink(missing_ok=True)
@@ -255,7 +306,10 @@ class RenameDatasetRequest(BaseModel):
 
 
 @app.delete("/datasets/{file_id}")
-async def delete_dataset(file_id: str) -> dict[str, str]:
+async def delete_dataset(
+    file_id: str,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, str]:
     """Remove an uploaded dataset and its registry entry."""
     _validate_file_id(file_id)
 
@@ -272,7 +326,11 @@ async def delete_dataset(file_id: str) -> dict[str, str]:
 
 
 @app.patch("/datasets/{file_id}")
-async def rename_dataset(file_id: str, req: RenameDatasetRequest) -> dict[str, str]:
+async def rename_dataset(
+    file_id: str,
+    req: RenameDatasetRequest,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, str]:
     """Rename a dataset (updates the stored display name, not the physical file)."""
     _validate_file_id(file_id)
 
@@ -334,7 +392,10 @@ def _resolve_file_id(file_id: str | None) -> str | None:
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest) -> StreamingResponse:
+async def chat(
+    req: ChatRequest,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> StreamingResponse:
     """
     Stream agent responses as Server-Sent Events.
 
@@ -342,6 +403,8 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     completed stages (Intent, Data, Clean, Model) are restored from the
     checkpoint and skipped, so only the remaining stages execute.
     """
+    if req.run_id:
+        _assert_run_owner(req.run_id, user)
     dataset_path = _resolve_file_id(req.file_id)
     _agents_import()
 
@@ -450,7 +513,11 @@ class ClarifyRequest(BaseModel):
 
 
 @app.post("/clarify/{run_id}")
-async def clarify_intent(run_id: str, req: ClarifyRequest) -> StreamingResponse:
+async def clarify_intent(
+    run_id: str,
+    req: ClarifyRequest,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> StreamingResponse:
     """
     Resume a pipeline that paused waiting for user clarification.
 
@@ -542,8 +609,12 @@ def _agents_import():
 
 
 @app.post("/train/{run_id}/cancel")
-async def cancel_training(run_id: str) -> dict[str, str]:
+async def cancel_training(
+    run_id: str,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, str]:
     """Signal an active training run to stop at the next step boundary."""
+    _assert_run_owner(run_id, user)
     _agents_import()
     from agents.train_agent import cancel_run
 
@@ -554,8 +625,12 @@ async def cancel_training(run_id: str) -> dict[str, str]:
 
 
 @app.post("/train/{run_id}/pause")
-async def pause_training(run_id: str) -> dict[str, str]:
+async def pause_training(
+    run_id: str,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, str]:
     """Block training at the next step boundary."""
+    _assert_run_owner(run_id, user)
     _agents_import()
     from agents.train_agent import pause_run, is_paused
 
@@ -568,8 +643,12 @@ async def pause_training(run_id: str) -> dict[str, str]:
 
 
 @app.post("/train/{run_id}/resume")
-async def resume_training(run_id: str) -> dict[str, str]:
+async def resume_training(
+    run_id: str,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, str]:
     """Unblock a paused training run."""
+    _assert_run_owner(run_id, user)
     _agents_import()
     from agents.train_agent import resume_run, is_paused
 
@@ -723,14 +802,17 @@ async def _run_sweep_child(
                 },
                 "artifact_path": train_out.get("artifact_path"),
                 "sweep_config":  sweep_config_combo,
-                "completed_at":  datetime.utcnow().isoformat() + "Z",
+                "completed_at":  datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
         except Exception as exc:
             logger.warning("[sweep][%s] failed to update run record: %s", run_id, exc)
 
 
 @app.post("/sweep")
-async def launch_sweep(req: SweepRequest) -> dict[str, Any]:
+async def launch_sweep(
+    req: SweepRequest,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, Any]:
     """
     Launch N parallel training runs with different hyperparameter combos.
 
@@ -761,14 +843,20 @@ async def launch_sweep(req: SweepRequest) -> dict[str, Any]:
         except Exception:
             pass
 
+    # runs.user_id is a NOT NULL uuid FK to auth.users — only the backend can
+    # create rows when it knows the authenticated owner. Without a verified user
+    # (permissive rollout phase) the frontend is responsible for creating the
+    # rows, and the child runs below will UPDATE them by id.
+    owner_id = user.get("id") if user else None
+
     run_ids: list[str] = []
     for combo in combos:
         run_id = str(uuid.uuid4())
-        if sb:
+        if sb and owner_id:
             try:
                 result = sb.table("runs").insert({
                     "id":            run_id,
-                    "user_id":       "sweep",      # overridden by frontend-created rows in practice
+                    "user_id":       owner_id,
                     "status":        "pending",
                     "sweep_id":      sweep_id,
                     "parent_run_id": req.parent_run_id,
@@ -849,8 +937,13 @@ def _validate_artifact_path(artifact_path: str, run_id: str) -> Path:
     # Also allow paths relative to the agents directory (agent pipeline output)
     agents_runs = (Path(__file__).parent.parent / "agents" / "runs").resolve()
 
-    if not (str(resolved).startswith(str(runs_resolved)) or
-            str(resolved).startswith(str(agents_runs))):
+    def _within(child: Path, parent: Path) -> bool:
+        # True if child is the dir itself or genuinely nested under it.
+        # Path containment (not string prefix) so a sibling like `runs_evil`
+        # cannot satisfy the check by sharing a name prefix.
+        return child == parent or parent in child.parents
+
+    if not (_within(resolved, runs_resolved) or _within(resolved, agents_runs)):
         logger.warning(
             "Rejected artifact_path outside RUNS_DIR: run_id=%s path=%s",
             run_id, artifact_path,
@@ -861,10 +954,15 @@ def _validate_artifact_path(artifact_path: str, run_id: str) -> Path:
 
 
 @app.post("/infer")
-async def run_inference(req: InferRequest) -> dict[str, Any]:
+async def run_inference(
+    req: InferRequest,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> dict[str, Any]:
     """Run classification inference on a trained model."""
     import asyncio
     from services.inference_cache import cache
+
+    _assert_run_owner(req.run_id, user)
 
     if len(req.text) > 2000:
         raise HTTPException(
@@ -911,11 +1009,15 @@ class ExportRequest(BaseModel):
 
 
 @app.post("/export")
-async def export_model_endpoint(req: ExportRequest) -> FileResponse:
+async def export_model_endpoint(
+    req: ExportRequest,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> FileResponse:
     """Convert a trained model to ONNX or TorchScript and return as a download."""
     import asyncio
     import shutil
 
+    _assert_run_owner(req.run_id, user)
     validated_path = _validate_artifact_path(req.artifact_path, req.run_id)
 
     from services.model_exporter import export_model
@@ -1090,7 +1192,10 @@ async def get_leaderboard(limit: int = 50) -> list[dict[str, Any]]:
 
 
 @app.get("/runs/{run_id}/script")
-async def download_training_script(run_id: str) -> StreamingResponse:
+async def download_training_script(
+    run_id: str,
+    user: dict[str, Any] | None = Depends(get_current_user),
+) -> StreamingResponse:
     """
     Generate and download a standalone Python training script for a completed run.
 
@@ -1099,6 +1204,8 @@ async def download_training_script(run_id: str) -> StreamingResponse:
     and returns it as a .py file download.
     """
     from services.run_event_writer import load_pipeline_checkpoint
+
+    _assert_run_owner(run_id, user)
 
     checkpoint = await load_pipeline_checkpoint(run_id)
     if not checkpoint:

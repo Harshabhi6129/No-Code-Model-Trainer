@@ -22,6 +22,7 @@ import {
 } from "recharts"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
+import { authHeader } from "@/lib/api"
 import { LossCurve, type EpochPoint } from "./loss-curve"
 import { PipelineDAG } from "@/components/pipeline-dag"
 
@@ -831,7 +832,7 @@ function SweepConfigPanel({
     try {
       const res = await fetch(`${API_URL_SWEEP}/sweep`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body: JSON.stringify({
           message: session.intent.trim() || `Train a ${session.hyperParams.task_type.replace(/_/g, " ")} model`,
           file_id: session.uploadResult.file_id || null,
@@ -957,7 +958,11 @@ function SetupColumn({
     const form = new FormData()
     form.append("file", file)
     try {
-      const res = await fetch(`${API_URL}/upload`, { method: "POST", body: form })
+      const res = await fetch(`${API_URL}/upload`, {
+        method: "POST",
+        headers: { ...(await authHeader()) },
+        body: form,
+      })
       if (!res.ok) throw new Error(await res.text())
       const data: UploadResult = await res.json()
       const label = file.name.replace(/\.(csv|json|jsonl)$/i, "").replace(/[_-]/g, " ").slice(0, 28)
@@ -1746,7 +1751,10 @@ export function TrainClient() {
     const session = state.sessions.find(s => s.id === sessionId)
     if (!session?.runId) return
     try {
-      await fetch(`${API_URL}/train/${session.runId}/cancel`, { method: "POST" })
+      await fetch(`${API_URL}/train/${session.runId}/cancel`, {
+        method: "POST",
+        headers: { ...(await authHeader()) },
+      })
       toast.info("Cancellation requested — stopping at next step boundary…")
     } catch {
       toast.error("Could not reach the server to cancel.")
@@ -1757,7 +1765,10 @@ export function TrainClient() {
     const session = state.sessions.find(s => s.id === sessionId)
     if (!session?.runId) return
     try {
-      const res = await fetch(`${API_URL}/train/${session.runId}/pause`, { method: "POST" })
+      const res = await fetch(`${API_URL}/train/${session.runId}/pause`, {
+        method: "POST",
+        headers: { ...(await authHeader()) },
+      })
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: "Could not pause" }))
         toast.error(body.detail ?? "Could not pause"); return
@@ -1773,7 +1784,10 @@ export function TrainClient() {
     const session = state.sessions.find(s => s.id === sessionId)
     if (!session?.runId) return
     try {
-      const res = await fetch(`${API_URL}/train/${session.runId}/resume`, { method: "POST" })
+      const res = await fetch(`${API_URL}/train/${session.runId}/resume`, {
+        method: "POST",
+        headers: { ...(await authHeader()) },
+      })
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: "Could not resume" }))
         toast.error(body.detail ?? "Could not resume"); return
@@ -1860,7 +1874,7 @@ export function TrainClient() {
       try {
         const res = await fetch(`${API_URL}/chat`, {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(await authHeader()) },
           body:    JSON.stringify({
             message:                  userIntent,
             file_id:                  session.uploadResult!.file_id,
@@ -2045,7 +2059,7 @@ export function TrainClient() {
     try {
       const res = await fetch(`${API_URL}/clarify/${session.runId}`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body:    JSON.stringify({ user_response: userResponse }),
       })
       if (!res.ok) {

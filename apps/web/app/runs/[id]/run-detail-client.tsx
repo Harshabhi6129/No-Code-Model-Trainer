@@ -22,6 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import type { Run, RunEvent } from "@/lib/supabase/types"
 import { DetailedAnalysis } from "@/components/detailed-analysis"
+import { authHeader } from "@/lib/api"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -338,7 +339,7 @@ function SweepModal({ run, onClose }: { run: Run; onClose: () => void }) {
     try {
       const res = await fetch(`${API_URL}/sweep`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body: JSON.stringify({
           message: typeof intent.user_intent === "string"
             ? intent.user_intent
@@ -520,7 +521,9 @@ function ExportSection({ run }: { run: Run }) {
     setScriptDl(true)
     setError(null)
     try {
-      const res = await fetch(`${API_URL}/runs/${run.id}/script`)
+      const res = await fetch(`${API_URL}/runs/${run.id}/script`, {
+        headers: { ...(await authHeader()) },
+      })
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: "Script generation failed" }))
         throw new Error(body.detail ?? "Script generation failed")
@@ -546,7 +549,7 @@ function ExportSection({ run }: { run: Run }) {
     try {
       const res = await fetch(`${API_URL}/export`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body: JSON.stringify({ run_id: run.id, artifact_path: run.artifact_path, format }),
       })
       if (!res.ok) {
@@ -984,7 +987,7 @@ function InferencePlayground({ run }: { run: Run }) {
     try {
       const res = await fetch(`${API_URL}/infer`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body: JSON.stringify({
           run_id: run.id,
           text: text.trim(),
