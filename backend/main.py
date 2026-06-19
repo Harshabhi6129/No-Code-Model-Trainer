@@ -198,6 +198,42 @@ def _enforce_quota(
         )
 
 
+# ── Orphaned-run reconciliation (issue #22) ──────────────────────────────────
+# Training runs in-process, so a restart/redeploy kills the in-memory task but
+# leaves the Supabase row stuck at 'running'/'pending' forever. On startup, fail
+# any such row older than the threshold so the UI stops showing a phantom run.
+_ORPHAN_RUN_MINUTES = int(os.getenv("ORPHAN_RUN_MINUTES", "30"))
+
+
+def _reconcile_orphaned_runs() -> None:
+    sb = _service_client()
+    if sb is None:
+        return
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=_ORPHAN_RUN_MINUTES)).isoformat()
+    try:
+        res = (
+            sb.table("runs")
+            .update({
+                "status": "failed",
+                "error_message": "Run was interrupted by a backend restart and could not be resumed.",
+                "completed_at": now.isoformat(),
+            })
+            .in_("status", ["running", "pending"])
+            .lt("created_at", cutoff)
+            .execute()
+        )
+        n = len(res.data or [])
+        if n:
+            logger.info("[startup] Reconciled %d orphaned run(s) → failed", n)
+    except Exception as exc:
+        logger.warning("[startup] orphan reconciliation failed: %s", exc)
+
+
+_reconcile_orphaned_runs()
+
+
 from services.socket_manager import manager as socket_manager
 
 
