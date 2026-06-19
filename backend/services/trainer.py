@@ -174,7 +174,7 @@ def _blocking_train(
         model=model,
         args=args,
         train_dataset=tokenized,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer),
         callbacks=[callback],
     )

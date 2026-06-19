@@ -638,7 +638,7 @@ def _blocking_train(
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=test_ds,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=collator,
         callbacks=[
             DivergenceCallback(),
@@ -707,7 +707,7 @@ def _blocking_train(
                 args=training_args_retry,
                 train_dataset=train_ds,
                 eval_dataset=test_ds,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 data_collator=collator,
                 callbacks=[
                     DivergenceCallback(),
@@ -1035,7 +1035,7 @@ def _blocking_train_ner(
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=test_ds,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=collator,
         compute_metrics=compute_metrics,
     )
